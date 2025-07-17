@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         B站清理工具
 // @namespace    http://tampermonkey.net/
-// @version      0.0.3
+// @version      0.0.4
 // @date         2025-07-17
 // @description  B站清理工具,一键清理B站私信,点赞,回复,系统通知等功能。
 // @author       zisull@qq.com
-// @match        https://www.bilibili.com/*
+// @match        bilibili.com/*
 // @icon         https://www.bilibili.com/favicon.ico
 // @updateURL    https://raw.githubusercontent.com/zisull/bilibili-cleaner/main/src/biliclean.js
 // @downloadURL  https://raw.githubusercontent.com/zisull/bilibili-cleaner/main/src/biliclean.js

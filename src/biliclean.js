@@ -416,29 +416,29 @@
     `;
   document.body.appendChild(cleanWin);
   cleanWin.style.display = 'none';
-  
+
   // 添加全选/反选功能
   const toggleSubtitle = cleanWin.querySelector('.bili-clean-toggle');
   toggleSubtitle.style.cursor = 'pointer';
   toggleSubtitle.style.userSelect = 'none';
   toggleSubtitle.style.transition = 'color 0.2s, transform 0.2s';
-  
-  toggleSubtitle.onclick = function() {
+
+  toggleSubtitle.onclick = function () {
     const checkboxes = cleanWin.querySelectorAll('input[type="checkbox"]');
     const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
     const shouldCheckAll = checkedCount < checkboxes.length;
-    
+
     // 切换所有复选框状态
     checkboxes.forEach(checkbox => {
       checkbox.checked = shouldCheckAll;
     });
-    
+
     // 添加点击反馈动画
     toggleSubtitle.style.transform = 'scale(0.95)';
     setTimeout(() => {
       toggleSubtitle.style.transform = '';
     }, 150);
-    
+
     // 更新提示文本
     const statusText = shouldCheckAll ? '已全选' : '已取消';
     toggleSubtitle.textContent = `一键清理，焕然一新 (${statusText})`;
@@ -446,7 +446,7 @@
       toggleSubtitle.textContent = '一键清理，焕然一新';
     }, 1500);
   };
-  
+
   // 添加悬停效果
   toggleSubtitle.onmouseenter = () => {
     toggleSubtitle.style.color = '#fff';
@@ -627,6 +627,10 @@
         const sessions = res.data?.['session_list'] || []; // bracket notation avoids unresolved warning
         if (sessions.length === 0) {
           log('私信列表为空，清理完毕');
+          // 如果是第一次检查就发现为空，说明本来就没有私信，应该显示"记录为空"
+          if (succ === 0) {
+            document.getElementById(resultId).textContent = '记录为空';
+          }
           break;
         }
 
@@ -650,7 +654,11 @@
         break;
       }
     }
-    document.getElementById(resultId).textContent = succ > 0 ? '清理完成' : '清理失败';
+    // 优化结果显示逻辑
+    const currentResult = document.getElementById(resultId).textContent;
+    if (currentResult !== '记录为空') {
+      document.getElementById(resultId).textContent = succ > 0 ? '清理完成' : '清理失败';
+    }
     log(`私信清理结束，成功${succ}条`);
   }
 
@@ -742,7 +750,18 @@
 
   // --------- 删除私信函数 ---------
   async function deletePrivateMessage(talkerId) {
+    // 安全检查：确保必要参数存在
+    if (!talkerId || talkerId === '' || talkerId === undefined || talkerId === null) {
+      log(`私信删除参数不完整，跳过删除操作: talkerId=${talkerId}`);
+      return { ok: false, raw: '', msg: '参数不完整，跳过操作' };
+    }
+
     const csrf = document.cookie.match(/bili_jct=([0-9a-zA-Z]+);?/)?.[1] || '';
+    if (!csrf) {
+      log('未找到CSRF令牌，可能未登录');
+      return { ok: false, raw: '', msg: '未找到CSRF令牌' };
+    }
+
     const params = `talker_id=${talkerId}&session_type=1&build=0&mobi_app=web&csrf_token=${csrf}&csrf=${csrf}`;
     try {
       const res = await fetch('https://api.vc.bilibili.com/session_svr/v1/session_svr/remove_session', {

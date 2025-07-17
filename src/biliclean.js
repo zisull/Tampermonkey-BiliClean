@@ -143,11 +143,54 @@
     if (dragging) {
       dragging = false;
       document.body.style.userSelect = '';
-      // 自动吸附到最近边缘
+      // 增强的自动贴边吸附逻辑
       const winW = window.innerWidth, winH = window.innerHeight;
       let left = floatBtn.offsetLeft, top = floatBtn.offsetTop;
-      let snapLeft = left < winW / 2 ? 20 : winW - floatBtn.offsetWidth - 20;
-      let snapTop = Math.max(20, Math.min(top, winH - floatBtn.offsetHeight - 20));
+      const btnW = floatBtn.offsetWidth, btnH = floatBtn.offsetHeight;
+
+      // 计算到各边的距离
+      const distToLeft = left;
+      const distToRight = winW - left - btnW;
+      const distToTop = top;
+      const distToBottom = winH - top - btnH;
+
+      // 找到最近的边
+      const minDist = Math.min(distToLeft, distToRight, distToTop, distToBottom);
+
+      // 根据最近的边进行吸附
+      if (minDist === distToLeft) {
+        // 吸附到左边
+        left = 20;
+      } else if (minDist === distToRight) {
+        // 吸附到右边
+        left = winW - btnW - 20;
+      } else if (minDist === distToTop) {
+        // 吸附到顶部
+        top = 20;
+        left = left < winW / 2 ? 20 : winW - btnW - 20; // 同时水平吸附
+      } else {
+        // 吸附到底部
+        top = winH - btnH - 20;
+        left = left < winW / 2 ? 20 : winW - btnW - 20; // 同时水平吸附
+      }
+
+      // 确保不超出边界，并应用贴边半隐藏效果
+      let snapLeft = Math.max(20, Math.min(left, winW - btnW - 20));
+      let snapTop = Math.max(20, Math.min(top, winH - btnH - 20));
+
+      // 贴边半隐藏效果
+      if (minDist === distToLeft) {
+        snapLeft = -btnW / 2; // 左边半隐藏
+      } else if (minDist === distToRight) {
+        snapLeft = winW - btnW / 2; // 右边半隐藏
+      } else if (minDist === distToTop) {
+        snapTop = -btnH / 2; // 顶部半隐藏
+        snapLeft = left < winW / 2 ? -btnW / 2 : winW - btnW / 2;
+      } else if (minDist === distToBottom) {
+        snapTop = winH - btnH / 2; // 底部半隐藏
+        snapLeft = left < winW / 2 ? -btnW / 2 : winW - btnW / 2;
+      }
+
       floatBtn.style.transition = 'left 0.3s cubic-bezier(.5,1.8,.5,1), top 0.3s cubic-bezier(.5,1.8,.5,1)';
       floatBtn.style.left = snapLeft + 'px';
       floatBtn.style.top = snapTop + 'px';
@@ -197,16 +240,27 @@
 
   // 菜单位置计算函数
   function updateMenuPosition() {
+    // 先显示菜单以获取准确的尺寸（包括主题栏）
+    const wasHidden = menu.style.display === 'none';
+    if (wasHidden) {
+      menu.style.display = 'block';
+      menu.style.visibility = 'hidden'; // 临时隐藏但保持布局
+    }
+
     const btnRect = floatBtn.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
     const winW = window.innerWidth;
     const winH = window.innerHeight;
     const centerX = winW / 2;
-    const centerY = winH / 2;
+
+    // 恢复菜单状态
+    if (wasHidden) {
+      menu.style.display = 'none';
+      menu.style.visibility = 'visible';
+    }
 
     // 计算按钮中心点
     const btnCenterX = btnRect.left + btnRect.width / 2;
-    const btnCenterY = btnRect.top + btnRect.height / 2;
 
     // 判断按钮相对于屏幕中心的位置
     const isLeft = btnCenterX < centerX;
@@ -222,32 +276,31 @@
       left = btnRect.left - menuRect.width - offset;
     }
 
-    // 智能垂直定位，优先居中对齐，但确保完全显示
-    top = btnRect.top + (btnRect.height - menuRect.height) / 2;
+    // 优化的垂直定位逻辑：确保菜单完全显示且与按钮对齐（包含主题栏高度）
+    const btnCenterY = btnRect.top + btnRect.height / 2;
+    const centerY = winH / 2;
+    const safeMargin = 20; // 增加安全边距
+    const themeBarHeight = 50; // 主题栏预估高度
+    const totalMenuHeight = menuRect.height + themeBarHeight; // 菜单总高度
 
-    // 边界检查，确保菜单不超出屏幕
-    left = Math.max(10, Math.min(left, winW - menuRect.width - 10));
-
-    // 特别处理垂直边界，确保菜单完全显示
-    if (top + menuRect.height > winH - 10) {
-      // 如果菜单底部超出屏幕，向上调整
-      top = winH - menuRect.height - 10;
-    }
-    if (top < 10) {
-      // 如果菜单顶部超出屏幕，向下调整
-      top = 10;
-    }
-
-    // 确保菜单完全不会与按钮重叠的安全检查
-    if (left + menuRect.width > btnRect.left - 10 && left < btnRect.right + 10 &&
-      top + menuRect.height > btnRect.top - 10 && top < btnRect.bottom + 10) {
-      // 如果仍有重叠风险，强制使用更大的偏移
-      if (btnCenterX < centerX) {
-        left = btnRect.right + 60; // 更大的安全距离
-      } else {
-        left = btnRect.left - menuRect.width - 60;
+    if (btnCenterY < centerY) {
+      // 按钮在屏幕上半部分，菜单顶部与按钮顶部对齐
+      top = btnRect.top;
+      // 检查是否会超出底部（考虑主题栏高度）
+      if (top + totalMenuHeight > winH - safeMargin) {
+        top = winH - totalMenuHeight - safeMargin;
+      }
+    } else {
+      // 按钮在屏幕下半部分，菜单底部与按钮底部对齐
+      top = btnRect.bottom - totalMenuHeight;
+      // 检查是否会超出顶部
+      if (top < safeMargin) {
+        top = safeMargin;
       }
     }
+
+    // 水平边界检查
+    left = Math.max(safeMargin, Math.min(left, winW - menuRect.width - safeMargin));
 
     menu.style.left = left + 'px';
     menu.style.top = top + 'px';
@@ -334,7 +387,7 @@
   let cleanWinDragging = false, cleanWinOffsetX = 0, cleanWinOffsetY = 0;
   cleanWin.innerHTML = `
       <div class="bili-clean-title bili-clean-drag-handle">B站清理工具</div>
-      <div class="bili-clean-sub">一键清理，焕然一新</div>
+      <div class="bili-clean-sub bili-clean-toggle">一键清理，焕然一新</div>
       <div class="bili-clean-options">
         <div class="bili-clean-row">
           <label><input type="checkbox" id="clean-reply"> 回复</label>
@@ -363,6 +416,46 @@
     `;
   document.body.appendChild(cleanWin);
   cleanWin.style.display = 'none';
+  
+  // 添加全选/反选功能
+  const toggleSubtitle = cleanWin.querySelector('.bili-clean-toggle');
+  toggleSubtitle.style.cursor = 'pointer';
+  toggleSubtitle.style.userSelect = 'none';
+  toggleSubtitle.style.transition = 'color 0.2s, transform 0.2s';
+  
+  toggleSubtitle.onclick = function() {
+    const checkboxes = cleanWin.querySelectorAll('input[type="checkbox"]');
+    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+    const shouldCheckAll = checkedCount < checkboxes.length;
+    
+    // 切换所有复选框状态
+    checkboxes.forEach(checkbox => {
+      checkbox.checked = shouldCheckAll;
+    });
+    
+    // 添加点击反馈动画
+    toggleSubtitle.style.transform = 'scale(0.95)';
+    setTimeout(() => {
+      toggleSubtitle.style.transform = '';
+    }, 150);
+    
+    // 更新提示文本
+    const statusText = shouldCheckAll ? '已全选' : '已取消';
+    toggleSubtitle.textContent = `一键清理，焕然一新 (${statusText})`;
+    setTimeout(() => {
+      toggleSubtitle.textContent = '一键清理，焕然一新';
+    }, 1500);
+  };
+  
+  // 添加悬停效果
+  toggleSubtitle.onmouseenter = () => {
+    toggleSubtitle.style.color = '#fff';
+    toggleSubtitle.style.transform = 'scale(1.02)';
+  };
+  toggleSubtitle.onmouseleave = () => {
+    toggleSubtitle.style.color = '';
+    toggleSubtitle.style.transform = '';
+  };
 
   // 清理窗口拖拽功能
   const cleanWinTitle = cleanWin.querySelector('.bili-clean-drag-handle');
@@ -483,7 +576,9 @@
       }
       let items = getItems(res);
       if (!items.length) {
-        log('接口items为空，可能已清理完毕或风控/参数错误/未登录/csrf失效');
+        log('接口items为空，记录已清空或无待清理项目');
+        // 如果是正常返回但无数据，说明已经清空，这也是成功状态
+        document.getElementById(resultId).textContent = '记录为空';
         break;
       }
       for (let i = 0; i < items.length; i++) {
@@ -505,7 +600,12 @@
     }
     progressBar.style.width = '100%';
     setTimeout(() => progressBarWrap.style.display = 'none', 800);
-    document.getElementById(resultId).textContent = succ > 0 ? '清理完成' : '清理失败';
+
+    // 优化结果显示逻辑
+    const currentResult = document.getElementById(resultId).textContent;
+    if (currentResult !== '记录为空') {
+      document.getElementById(resultId).textContent = succ > 0 ? '清理完成' : '清理失败';
+    }
     log(`类型${type}清理结束，成功${succ}条`);
   }
 
@@ -700,7 +800,18 @@
 
   // --------- 获取消息id和单条删除函数 ---------
   async function testDeleteMsg(id, type) {
+    // 安全检查：确保必要参数存在
+    if (!id || id === '' || type === undefined || type === null) {
+      log(`参数不完整，跳过删除操作: id=${id}, type=${type}`);
+      return { ok: false, raw: '', msg: '参数不完整，跳过操作' };
+    }
+
     const csrf = document.cookie.match(/bili_jct=([0-9a-zA-Z]+);?/)?.[1] || '';
+    if (!csrf) {
+      log('未找到CSRF令牌，可能未登录');
+      return { ok: false, raw: '', msg: '未找到CSRF令牌' };
+    }
+
     const params = `tp=${type}&id=${encodeURIComponent(id)}&build=0&mobi_app=web&csrf_token=${csrf}&csrf=${csrf}`;
     try {
       const res = await fetch('https://api.bilibili.com/x/msgfeed/del', {
@@ -1292,12 +1403,14 @@
   themeBar.id = 'bili-theme-bar';
   themeBar.style.display = 'flex';
   themeBar.style.justifyContent = 'space-around';
-  themeBar.style.margin = '10px 0 0 0';
-  themeBar.style.gap = '8px';
-  themeBar.style.padding = '6px 0';
-  themeBar.style.borderTop = '1px solid #eee';
+  themeBar.style.margin = '8px 0 0 0';
+  themeBar.style.gap = '6px';
+  themeBar.style.padding = '8px 12px 12px 12px'; // 增加底部内边距确保完全显示
+  themeBar.style.borderTop = '1px solid rgba(255,255,255,0.2)';
   themeBar.style.fontSize = '0.98rem';
   themeBar.style.userSelect = 'none';
+  themeBar.style.minHeight = '40px'; // 确保有足够高度
+  themeBar.style.alignItems = 'center'; // 垂直居中对齐
   // 色块按钮生成
   Object.entries(THEMES).forEach(([k, v]) => {
     const dot = document.createElement('span');

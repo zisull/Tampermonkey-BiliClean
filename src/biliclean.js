@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         B站清理工具
 // @namespace    http://tampermonkey.net/
-// @version      0.0.2
-// @date         2025-07-09
+// @version      0.0.3
+// @date         2025-07-17
 // @description  B站清理工具,一键清理B站私信,点赞,回复,系统通知等功能。
 // @author       zisull@qq.com
 // @match        https://www.bilibili.com/*

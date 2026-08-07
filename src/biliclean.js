@@ -96,7 +96,7 @@
   // --------- 自动清理配置存储（功能核心） ---------
   // 类别开关与旧版一致；freq/keep 为新 UI 的自动清理配置（保留语义仅展示，不实际限定删除范围）
   const SETTINGS_KEY = 'bili-auto-clean-settings';
-  const defaultSettings = { types: { reply: true, like: true, at: true, pm: true, history: true, system: true }, freq: '关闭', keep: '一周', theme: 'dark' };
+  const defaultSettings = { types: { reply: true, like: true, at: true, pm: true, history: true, system: true }, freq: '关闭', keep: '一周', theme: 'dark', bg: true };
   function loadSettings() {
     try {
       const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
@@ -329,6 +329,7 @@
 .bc-root .fab svg{width:34px;height:34px}
 @keyframes bcFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 .bc-root .panel{position:fixed;right:22px;bottom:78px;width:286px;max-height:82vh;overflow:auto;background:linear-gradient(180deg,color-mix(in srgb,var(--panelSolid) 82%,transparent),color-mix(in srgb,var(--panelSolid) 88%,transparent)),url('https://raw.githubusercontent.com/zisull/Tampermonkey-BiliClean/main/img/bg.jpg') center/cover no-repeat;backdrop-filter:blur(30px) saturate(140%);-webkit-backdrop-filter:blur(30px) saturate(140%);border:1px solid var(--border);border-radius:var(--radius);color:var(--accent2);text-shadow:0 1px 2px rgba(0,0,0,.55);box-shadow:var(--shadow);z-index:9998;transform-origin:bottom right;transition:opacity .22s,transform .22s}
+.bc-root .panel.no-bg{background:var(--panel)}
 .bc-root .panel.hide{opacity:0;transform:scale(.92) translateY(8px);pointer-events:none}
 .bc-root .drops{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;border-radius:var(--radius)}
 .bc-root .drop{position:absolute;top:-14px;border-radius:50% 50% 50% 50%/62% 62% 40% 40%;background:radial-gradient(circle at 34% 30%,rgba(255,255,255,.6),rgba(255,255,255,.12) 42%,rgba(255,255,255,.02) 72%);box-shadow:inset 0 -2px 3px rgba(255,255,255,.3),0 1px 2px rgba(0,0,0,.25);animation:bcDropFall linear infinite}
@@ -379,7 +380,7 @@
 .bc-root .auto-sub{display:none;padding:9px 0 10px;border-bottom:1px solid var(--border);gap:9px}
 .bc-root .auto-sub.show{display:flex;flex-direction:column}
 .bc-root .auto-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.bc-root .auto-sub .as-l{font-size:11px;color:var(--muted);flex:none}
+.bc-root .as-l{font-size:11px;color:var(--muted);flex:none}
 .bc-root .row{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)}
 .bc-root .row:last-child{border-bottom:none}
 .bc-root .row label{font-size:12px;color:var(--accent2)}
@@ -488,7 +489,13 @@
           </div>
         </div>
         <div class="row">
-          <div><label>主题</label></div>
+          <div class="auto-row" style="flex:none;gap:8px">
+            <span class="as-l">背景图</span>
+            <div class="seg" id="bgToggle" style="flex:none">
+              <button data-act="on">开</button>
+              <button data-act="off">关</button>
+            </div>
+          </div>
           <div class="palette" id="pal">
             <span class="swatch on" data-th="dark" title="暗"></span>
             <span class="swatch" data-th="pink" title="粉"></span>
@@ -584,6 +591,19 @@
     applyTheme(theme);
     settings.theme = theme; saveSettings(settings);
   });
+
+  // 背景图 开/关（关 = 移除背景图，回到纯透明面板）
+  $$('#bgToggle button').forEach(b => {
+    if ((b.dataset.act === 'on') === (settings.bg !== false)) b.classList.add('on');
+    b.onclick = () => {
+      $$('#bgToggle button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      const on = b.dataset.act === 'on';
+      settings.bg = on; saveSettings(settings);
+      panel.classList.toggle('no-bg', !on);
+    };
+  });
+  panel.classList.toggle('no-bg', settings.bg === false);
 
   // --- 宽限确认（核心）---
   const grace = $('#grace'), graceN = $('#graceN'), graceFg = $('#graceFg'),

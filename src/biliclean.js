@@ -1,4 +1,4 @@
-﻿// ==UserScript==
+// ==UserScript==
 // @name         B站清理工具
 // @namespace    http://tampermonkey.net/
 // @version      0.2.0
@@ -389,16 +389,18 @@
 .bc-root .swatch[data-th="blue"]{background:#546de5}
 .bc-root .swatch[data-th="green"]{background:#16a085}
 .bc-root .swatch[data-th="purple"]{background:#a855f7}
-.bc-root .snack{position:fixed;left:50%;bottom:30px;transform:translateX(-50%) translateY(20px);background:var(--snack);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--border);border-radius:13px;box-shadow:var(--shadow);padding:11px 15px;display:flex;align-items:center;gap:13px;z-index:10000;min-width:270px;opacity:0;pointer-events:none;transition:.25s;color:var(--text)}
-.bc-root .snack.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
-.bc-root .snack .txt{font-size:12.5px;flex:1}
-.bc-root .snack .txt b{color:var(--accent2);font-weight:600}
-.bc-root .snack .undo{border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:11.5px;padding:5px 11px;border-radius:9px;cursor:pointer}
-.bc-root .snack .undo:hover{border-color:var(--accent)}
-.bc-root .ring{width:24px;height:24px;flex:none}
-.bc-root .ring circle{fill:none;stroke:var(--border);stroke-width:3}
-.bc-root .ring .fg{stroke:var(--accent);stroke-linecap:round;transform:rotate(-90deg);transform-origin:center;stroke-dasharray:75.4;stroke-dashoffset:0;transition:stroke-dashoffset 1s linear}
-.bc-root .snack .bar{position:absolute;left:0;bottom:0;height:3px;background:var(--accent);border-radius:0 0 13px 13px;width:100%;transition:width 1s linear}
+.bc-root .grace{display:none;align-items:center;gap:11px;margin:0 0 12px;padding:10px 12px;position:relative;overflow:hidden;border:1px solid var(--border);border-radius:12px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 16%,transparent),color-mix(in srgb,var(--accent2) 13%,transparent));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 25%,transparent)}
+.bc-root .grace.show{display:flex;animation:bcGraceIn .25s ease}
+@keyframes bcGraceIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.bc-root .grace-ring{width:34px;height:34px;flex:none}
+.bc-root .grace-ring .track{fill:none;stroke:var(--border);stroke-width:3.5}
+.bc-root .grace-ring .fg{fill:none;stroke:var(--accent);stroke-width:3.5;stroke-linecap:round;transform:rotate(-90deg);transform-origin:center;stroke-dasharray:94.25;stroke-dashoffset:0;transition:stroke-dashoffset 1s linear;filter:drop-shadow(0 0 3px var(--glow))}
+.bc-root .grace-ring text{fill:var(--text);font-size:14px;font-weight:800;font-family:inherit}
+.bc-root .grace-txt{font-size:12.5px;flex:1;color:var(--text);line-height:1.4}
+.bc-root .grace-txt b{color:var(--accent2);font-weight:700}
+.bc-root .grace-undo{border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:11.5px;padding:5px 12px;border-radius:9px;cursor:pointer;flex:none;transition:.16s}
+.bc-root .grace-undo:hover{border-color:var(--accent);filter:brightness(1.08)}
+.bc-root .grace .bar{position:absolute;left:0;bottom:0;height:3px;background:var(--accent);width:100%;transition:width 1s linear;border-radius:0 0 11px 11px}
 `;
 
   const HTML = `
@@ -429,6 +431,16 @@
     <span class="dot">BC</span><h3 id="title" title="拖我移动 · 点击反选类别">BiliClean</h3><span class="x" id="close">×</span>
   </div>
   <div class="col">
+    <div class="grace" id="grace">
+      <svg class="grace-ring" viewBox="0 0 36 36">
+        <circle class="track" cx="18" cy="18" r="15"/>
+        <circle class="fg" id="graceFg" cx="18" cy="18" r="15"/>
+        <text id="graceNum" x="18" y="23" text-anchor="middle">3</text>
+      </svg>
+      <div class="grace-txt">即将清理 <b id="graceN">6</b> 类 · 可撤销</div>
+      <button class="grace-undo" id="graceUndo">撤销</button>
+      <div class="bar" id="graceBar"></div>
+    </div>
     <div class="block">
       <div class="chips" id="cats">
         <div class="chip on" data-cat="reply"><span class="ct"></span>回复</div>
@@ -483,14 +495,6 @@
     </div>
   </div>
 </div>
-<div class="snack" id="snack">
-  <svg class="ring" viewBox="0 0 26 26">
-    <circle cx="13" cy="13" r="12"/>
-    <circle class="fg" id="ringFg" cx="13" cy="13" r="12"/>
-  </svg>
-  <div class="txt">即将清理 <b id="snN">6</b> 类 · 可撤销</div>
-  <button class="undo" id="undoBtn">撤销</button>
-  <div class="bar" id="snBar"></div>
 </div>`;
 
   // 注入样式与 DOM（作用域隔离，不影响 B 站宿主页）
@@ -576,35 +580,39 @@
   });
 
   // --- 宽限确认（核心）---
-  const snack = $('#snack'), snN = $('#snN'), ringFg = $('#ringFg'), snBar = $('#snBar'),
-    undoBtn = $('#undoBtn'), cleanNow = $('#cleanNow'),
+  const grace = $('#grace'), graceN = $('#graceN'), graceFg = $('#graceFg'),
+    graceNum = $('#graceNum'), graceBar = $('#graceBar'),
+    graceUndo = $('#graceUndo'), cleanNow = $('#cleanNow'),
     prog = $('#prog'), pbar = $('#pbar'), pnum = $('#pnum');
   let graceTimer = null, graceLeft = 0, busy = false, hideTimer = null;
   const TOTAL = 3;
   function requestClean(k, cats) {
-    snN.textContent = k;
-    snack.classList.add('show');
+    graceN.textContent = k;
+    panel.classList.remove('hide'); // 主界面可见，通知直接显示在面板顶部
+    grace.classList.add('show');
     graceLeft = TOTAL;
-    ringFg.style.transition = 'none'; ringFg.style.strokeDashoffset = 0; snBar.style.transition = 'none'; snBar.style.width = '100%';
-    requestAnimationFrame(() => { ringFg.style.transition = 'stroke-dashoffset 1s linear'; snBar.style.transition = 'width 1s linear'; });
+    graceNum.textContent = graceLeft;
+    graceFg.style.transition = 'none'; graceFg.style.strokeDashoffset = 0; graceBar.style.transition = 'none'; graceBar.style.width = '100%';
+    requestAnimationFrame(() => { graceFg.style.transition = 'stroke-dashoffset 1s linear'; graceBar.style.transition = 'width 1s linear'; });
     graceTimer = setInterval(() => {
       graceLeft--;
+      graceNum.textContent = Math.max(0, graceLeft);
       const frac = graceLeft / TOTAL;
-      ringFg.style.strokeDashoffset = 75.4 * (1 - frac);
-      snBar.style.width = (frac * 100) + '%';
+      graceFg.style.strokeDashoffset = 94.25 * (1 - frac);
+      graceBar.style.width = (frac * 100) + '%';
       if (graceLeft <= 0) { clearInterval(graceTimer); graceTimer = null; startRealClean(cats); }
     }, 1000);
   }
   function cancelClean() {
     if (graceTimer) { clearInterval(graceTimer); graceTimer = null; }
-    snack.classList.remove('show');
+    grace.classList.remove('show');
     summary.innerHTML = '已取消本次清理';
     busy = false; cleanNow.disabled = false;
   }
   // 真实清理：调用核心 cleanType，通过 report/onProgress 回调驱动进度与纯文字摘要（不预载总数）
   async function startRealClean(cats) {
     if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-    snack.classList.remove('show');
+    grace.classList.remove('show');
     prog.classList.add('show'); pnum.classList.add('show');
     pbar.classList.add('indet'); pnum.textContent = '清理中…';
     busy = true; cleanNow.disabled = true;
@@ -638,7 +646,7 @@
     busy = false; cleanNow.disabled = false;
     setTimeout(() => { prog.classList.remove('show'); pnum.classList.remove('show'); }, 900);
   }
-  undoBtn.onclick = cancelClean;
+  graceUndo.onclick = cancelClean;
   cleanNow.onclick = () => {
     if (busy) return;
     const onCats = Object.keys(settings.types).filter(k => settings.types[k]);

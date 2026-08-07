@@ -1,8 +1,8 @@
 ﻿// ==UserScript==
 // @name         B站清理工具
 // @namespace    http://tampermonkey.net/
-// @version      0.1.1
-// @date         2025-07-17
+// @version      0.2.0
+// @date         2026-08-07
 // @description  B站清理工具,一键清理B站私信,点赞,回复,系统通知等功能。
 // @author       zisull@qq.com
 // @match        *://*.bilibili.com/*
@@ -16,16 +16,9 @@
 (function () {
   'use strict';
 
-  // --------- 可配置常量 ---------
-  const DONATE_QR_URL = 'https://raw.githubusercontent.com/zisull/Tampermonkey-BiliClean/main/img/zsm.jpg';
-
-  // --------- 日志工具 ---------
+  // --------- 日志工具（无 UI 依赖，输出到控制台） ---------
   function log(msg) {
-    const logArea = document.getElementById('bili-debug-log');
-    if (logArea) {
-      logArea.value += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
-      logArea.scrollTop = logArea.scrollHeight;
-    }
+    console.log('[BiliClean] ' + msg);
   }
 
   // --------- 公共工具函数 ---------
@@ -61,6 +54,12 @@
         }
         return { ok: json.code === 0, msg: json.message || '' };
       } catch (e) {
+        if (attempt < retries - 1) {
+          const wait = Math.min(5000 * Math.pow(2, attempt), 30000);
+          log(`请求异常，${wait / 1000}秒后重试(${attempt + 1}/${retries}): ${e}`);
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
         return { ok: false, msg: '请求异常: ' + e };
       }
     }
@@ -80,6 +79,12 @@
         }
         return res;
       } catch (e) {
+        if (attempt < retries - 1) {
+          const wait = Math.min(5000 * Math.pow(2, attempt), 30000);
+          log(`请求异常，${wait / 1000}秒后重试(${attempt + 1}/${retries}): ${e}`);
+          await new Promise(r => setTimeout(r, wait));
+          continue;
+        }
         log('请求异常: ' + e);
         return null;
       }
@@ -88,389 +93,10 @@
     return null;
   }
 
-  // --------- 樱花悬浮可拖动按钮 ---------
-  const floatBtn = document.createElement('div');
-  floatBtn.id = 'bili-float-btn';
-  floatBtn.innerHTML = `
-      <svg width="42" height="42" viewBox="0 0 48 48" fill="none" style="filter:drop-shadow(0 2px 6px var(--bili-sakura-glow,rgba(253,164,175,.5)));transition:filter .3s">
-        <g transform="translate(24,22)">
-          <g opacity=".9">
-            <g>
-              <animateTransform attributeName="transform" type="rotate" values="0;360" dur="8s" repeatCount="indefinite"/>
-              <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--bili-sakura-petal,#fda4af)"/>
-              <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--bili-sakura-petal,#fda4af)" transform="rotate(72)"/>
-              <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--bili-sakura-petal,#fda4af)" transform="rotate(144)"/>
-              <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--bili-sakura-petal,#fda4af)" transform="rotate(216)"/>
-              <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--bili-sakura-petal,#fda4af)" transform="rotate(288)"/>
-            </g>
-            <circle cx="0" cy="0" r="2" fill="var(--bili-sakura-center,#f43f5e)" opacity=".6"/>
-          </g>
-          <circle cx="8" cy="10" r="1.5" fill="var(--bili-sakura-petal,#fda4af)" opacity=".4">
-            <animate attributeName="opacity" values=".4;.1;.4" dur="3s" repeatCount="indefinite"/>
-            <animateTransform attributeName="transform" type="translate" values="0,0;3,6;0,0" dur="3s" repeatCount="indefinite"/>
-          </circle>
-          <circle cx="-6" cy="12" r="1" fill="var(--bili-sakura-petal,#fda4af)" opacity=".3">
-            <animate attributeName="opacity" values=".3;.1;.3" dur="3.5s" begin=".5s" repeatCount="indefinite"/>
-            <animateTransform attributeName="transform" type="translate" values="0,0;-2,8;0,0" dur="3.5s" begin=".5s" repeatCount="indefinite"/>
-          </circle>
-        </g>
-      </svg>
-    `;
-  document.body.appendChild(floatBtn);
-  let dragging = false, dragStartX = 0, dragStartY = 0, isDragged = false, offsetX = 0, offsetY = 0;
-
-  function onBtnDragMove(e) {
-    if (!dragging) return;
-    floatBtn.style.left = (e.clientX - offsetX) + 'px';
-    floatBtn.style.top = (e.clientY - offsetY) + 'px';
-  }
-
-  function onBtnDragEnd() {
-    if (!dragging) return;
-    dragging = false;
-    document.body.style.userSelect = '';
-    document.removeEventListener('mousemove', onBtnDragMove);
-    document.removeEventListener('mouseup', onBtnDragEnd);
-
-    const moved = Math.abs(floatBtn.offsetLeft - dragStartX) + Math.abs(floatBtn.offsetTop - dragStartY);
-    if (moved > 5) isDragged = true;
-
-    const winW = window.innerWidth, winH = window.innerHeight;
-    const btnW = floatBtn.offsetWidth, btnH = floatBtn.offsetHeight;
-    const left = Math.max(0, Math.min(floatBtn.offsetLeft, winW - btnW));
-    const top = Math.max(0, Math.min(floatBtn.offsetTop, winH - btnH));
-
-    floatBtn.style.transition = 'left 0.3s cubic-bezier(.5,1.8,.5,1), top 0.3s cubic-bezier(.5,1.8,.5,1)';
-    floatBtn.style.left = left + 'px';
-    floatBtn.style.top = top + 'px';
-
-    if (menuVisible) {
-      setTimeout(() => updateMenuPosition(), 300);
-    }
-  }
-
-  floatBtn.addEventListener('mousedown', function (e) {
-    dragging = true;
-    isDragged = false;
-    dragStartX = floatBtn.offsetLeft;
-    dragStartY = floatBtn.offsetTop;
-    offsetX = e.clientX - floatBtn.offsetLeft;
-    offsetY = e.clientY - floatBtn.offsetTop;
-    document.body.style.userSelect = 'none';
-    floatBtn.style.transition = 'none';
-    document.addEventListener('mousemove', onBtnDragMove);
-    document.addEventListener('mouseup', onBtnDragEnd);
-  });
-  floatBtn.style.position = 'fixed';
-  floatBtn.style.right = '20px';
-  floatBtn.style.bottom = '20px';
-  floatBtn.style.width = '42px';
-  floatBtn.style.height = '42px';
-  floatBtn.style.zIndex = '100000';
-  floatBtn.style.cursor = 'grab';
-  floatBtn.style.display = 'flex';
-  floatBtn.style.alignItems = 'center';
-  floatBtn.style.justifyContent = 'center';
-  floatBtn.style.background = 'none';
-  floatBtn.style.transition = 'transform 0.3s cubic-bezier(.34,1.56,.64,1), filter 0.3s';
-  floatBtn.style.animation = 'biliFloat 3s ease-in-out infinite';
-  floatBtn.onmouseenter = () => {
-    floatBtn.style.animation = 'none';
-    floatBtn.style.transform = 'scale(1.18) rotate(-8deg)';
-    floatBtn.style.filter = 'brightness(1.15) saturate(1.3)';
-    const svg = floatBtn.querySelector('svg');
-    if (svg) {
-      svg.style.filter = `drop-shadow(0 4px 12px ${getComputedStyle(floatBtn).getPropertyValue('--bili-sakura-glow') || 'rgba(253,164,175,.7)'})`;
-      svg.unpauseAnimations();
-    }
-  };
-  floatBtn.onmouseleave = () => {
-    floatBtn.style.transform = '';
-    floatBtn.style.filter = '';
-    floatBtn.style.animation = 'biliFloat 3s ease-in-out infinite';
-    const svg = floatBtn.querySelector('svg');
-    if (svg) svg.style.filter = '';
-  };
-
-  // --------- 动态美观悬停弹出菜单 ---------
-  const menu = document.createElement('div');
-  menu.id = 'bili-float-menu';
-  menu.innerHTML = `
-      <div class="bili-float-menu-item" data-win="clean"><span>🧹</span> 清理窗口</div>
-      <div class="bili-float-menu-item" data-win="settings"><span>⚙️</span> 自动设置</div>
-      <div class="bili-float-menu-item" data-win="debug"><span>💻</span> 调试日志</div>
-      <div class="bili-float-menu-item" data-win="author"><span>🏠</span> 作者主页</div>
-      <div class="bili-float-menu-item" data-win="donate"><span>🎁</span> 赞赏作者</div>
-    `;
-  document.body.appendChild(menu);
-  menu.style.display = 'none';
-
-  // 菜单位置计算函数
-  function updateMenuPosition() {
-    // 先显示菜单以获取准确的尺寸（包括主题栏）
-    const wasHidden = menu.style.display === 'none';
-    if (wasHidden) {
-      menu.style.display = 'block';
-      menu.style.visibility = 'hidden'; // 临时隐藏但保持布局
-    }
-
-    const btnRect = floatBtn.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
-    const winW = window.innerWidth;
-    const winH = window.innerHeight;
-    const centerX = winW / 2;
-
-    // 恢复菜单状态
-    if (wasHidden) {
-      menu.style.display = 'none';
-      menu.style.visibility = 'visible';
-    }
-
-    // 计算按钮中心点
-    const btnCenterX = btnRect.left + btnRect.width / 2;
-
-    // 判断按钮相对于屏幕中心的位置
-    const isLeft = btnCenterX < centerX;
-
-    let left, top;
-    const offset = 50; // 增加菜单与按钮的间距，确保完全不重叠
-
-    if (isLeft) {
-      // 按钮在左侧，菜单显示在右侧
-      left = btnRect.right + offset;
-    } else {
-      // 按钮在右侧，菜单显示在左侧
-      left = btnRect.left - menuRect.width - offset;
-    }
-
-    // 优化的垂直定位逻辑：确保菜单完全显示且与按钮对齐（包含主题栏高度）
-    const btnCenterY = btnRect.top + btnRect.height / 2;
-    const centerY = winH / 2;
-    const safeMargin = 20; // 增加安全边距
-    const themeBarHeight = 50; // 主题栏预估高度
-    const totalMenuHeight = menuRect.height + themeBarHeight; // 菜单总高度
-
-    if (btnCenterY < centerY) {
-      // 按钮在屏幕上半部分，菜单顶部与按钮顶部对齐
-      top = btnRect.top;
-      // 检查是否会超出底部（考虑主题栏高度）
-      if (top + totalMenuHeight > winH - safeMargin) {
-        top = winH - totalMenuHeight - safeMargin;
-      }
-    } else {
-      // 按钮在屏幕下半部分，菜单底部与按钮底部对齐
-      top = btnRect.bottom - totalMenuHeight;
-      // 检查是否会超出顶部
-      if (top < safeMargin) {
-        top = safeMargin;
-      }
-    }
-
-    // 水平边界检查
-    left = Math.max(safeMargin, Math.min(left, winW - menuRect.width - safeMargin));
-
-    menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
-    menu.style.right = 'auto';
-    menu.style.bottom = 'auto';
-  }
-
-  // 点击切换菜单显示/隐藏
-  let menuVisible = false;
-  floatBtn.addEventListener('click', (e) => {
-    if (isDragged) { isDragged = false; return; }
-
-    e.stopPropagation();
-    menuVisible = !menuVisible;
-
-    if (menuVisible) {
-      menu.style.display = 'block';
-      updateMenuPosition();
-      menu.classList.add('bili-menu-animate-in');
-      // 添加打开时的震动反馈
-      floatBtn.style.animation = 'biliButtonPulse 0.3s ease-out';
-      setTimeout(() => floatBtn.style.animation = '', 300);
-    } else {
-      menu.style.display = 'none';
-      menu.classList.remove('bili-menu-animate-in');
-    }
-  });
-
-  // 点击页面其他地方关闭菜单
-  document.addEventListener('click', (e) => {
-    if (!menu.contains(e.target) && !floatBtn.contains(e.target)) {
-      menuVisible = false;
-      menu.style.display = 'none';
-    }
-  });
-
-  // 窗口大小改变时更新菜单位置
-  window.addEventListener('resize', () => {
-    if (menuVisible && menu.style.display === 'block') {
-      updateMenuPosition();
-    }
-  });
-
-  menu.style.position = 'fixed';
-  menu.style.zIndex = '100001';
-  menu.style.background = 'rgba(255,255,255,0.98)';
-  menu.style.borderRadius = '18px';
-  menu.style.boxShadow = '0 6px 32px #a18cd144, 0 1.5px 8px #fff8';
-  menu.style.padding = '12px 0';
-  menu.style.minWidth = '120px';
-  menu.style.fontFamily = 'Microsoft Yahei,Arial,sans-serif';
-  menu.style.userSelect = 'none';
-  menu.style.backdropFilter = 'blur(6px)';
-  Array.from(menu.children).forEach((item, i) => {
-    item.style.padding = '12px 28px';
-    item.style.cursor = 'pointer';
-    item.style.fontSize = '1.08rem';
-    item.style.borderRadius = '12px';
-    item.style.display = 'flex';
-    item.style.alignItems = 'center';
-    item.style.gap = '10px';
-    item.style.transition = 'background 0.18s, transform 0.18s';
-    item.onmouseenter = () => {
-      item.style.background = 'linear-gradient(135deg, #f3e6ff 0%, #e8d5ff 100%)';
-      item.style.transform = 'translateX(4px) scale(1.06)';
-      item.style.boxShadow = '0 4px 12px rgba(161, 140, 209, 0.3)';
-      item.style.borderRadius = '12px';
-    };
-    item.onmouseleave = () => {
-      item.style.background = '';
-      item.style.transform = '';
-      item.style.boxShadow = '';
-      item.style.borderRadius = '12px';
-    };
-    item.style.animation = `biliMenuPop 0.3s cubic-bezier(.5,1.8,.5,1) ${i * 0.06}s both`;
-  });
-
-  // --------- 3D立体清理窗口 ---------
-  const cleanWin = document.createElement('div');
-  cleanWin.id = 'bili-clean-panel';
-
-  // 添加拖拽功能变量
-  let cleanWinDragging = false, cleanWinOffsetX = 0, cleanWinOffsetY = 0;
-  cleanWin.innerHTML = `
-      <div class="bili-clean-title bili-clean-drag-handle">B站清理工具</div>
-      <div class="bili-clean-sub bili-clean-toggle">一键清理，焕然一新</div>
-      <div class="bili-clean-options">
-        <div class="bili-clean-row">
-          <label><input type="checkbox" id="clean-reply"> 回复</label>
-          <label><input type="checkbox" id="clean-like"> 赞我</label>
-          <label><input type="checkbox" id="clean-at"> 艾特</label>
-        </div>
-        <div class="bili-clean-row">
-          <label><input type="checkbox" id="clean-pm"> 私信</label>
-          <label><input type="checkbox" id="clean-history"> 历史</label>
-          <label><input type="checkbox" id="clean-system"> 系统</label>
-        </div>
-      </div>
-      <button class="bili-clean-btn" id="bili-clean-start"><span class="bili-btn-glow"></span><span class="bili-btn-text">开始清理</span></button>
-      <div class="bili-clean-table">
-        <div class="bili-clean-thead"><span>项目</span><span>状态</span><span>结果</span></div>
-        <div class="bili-clean-tbody">
-          <div><span>回复</span><span id="clean-status-reply"></span><span id="clean-res-reply"></span></div>
-          <div><span>赞我</span><span id="clean-status-like"></span><span id="clean-res-like"></span></div>
-          <div><span>艾特</span><span id="clean-status-at"></span><span id="clean-res-at"></span></div>
-          <div><span>私信</span><span id="clean-status-pm"></span><span id="clean-res-pm"></span></div>
-          <div><span>历史</span><span id="clean-status-history"></span><span id="clean-res-history"></span></div>
-          <div><span>系统</span><span id="clean-status-system"></span><span id="clean-res-system"></span></div>
-        </div>
-      </div>
-      <button class="bili-clean-close">关闭</button>
-    `;
-  document.body.appendChild(cleanWin);
-  cleanWin.style.display = 'none';
-
-  // 添加全选/反选功能
-  const toggleSubtitle = cleanWin.querySelector('.bili-clean-toggle');
-  toggleSubtitle.style.cursor = 'pointer';
-  toggleSubtitle.style.userSelect = 'none';
-  toggleSubtitle.style.transition = 'color 0.2s, transform 0.2s';
-
-  toggleSubtitle.onclick = function () {
-    const checkboxes = cleanWin.querySelectorAll('input[type="checkbox"]');
-    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
-    const shouldCheckAll = checkedCount < checkboxes.length;
-
-    // 切换所有复选框状态
-    checkboxes.forEach(checkbox => {
-      checkbox.checked = shouldCheckAll;
-    });
-
-    // 添加点击反馈动画
-    toggleSubtitle.style.transform = 'scale(0.95)';
-    setTimeout(() => {
-      toggleSubtitle.style.transform = '';
-    }, 150);
-
-    // 更新提示文本
-    const statusText = shouldCheckAll ? '已全选' : '已取消';
-    toggleSubtitle.textContent = `一键清理，焕然一新 (${statusText})`;
-    setTimeout(() => {
-      toggleSubtitle.textContent = '一键清理，焕然一新';
-    }, 1500);
-  };
-
-  // 添加悬停效果
-  toggleSubtitle.onmouseenter = () => {
-    toggleSubtitle.style.color = '#fff';
-    toggleSubtitle.style.transform = 'scale(1.02)';
-  };
-  toggleSubtitle.onmouseleave = () => {
-    toggleSubtitle.style.color = '';
-    toggleSubtitle.style.transform = '';
-  };
-
-  // 清理窗口拖拽功能
-  const cleanWinTitle = cleanWin.querySelector('.bili-clean-drag-handle');
-  cleanWinTitle.style.cursor = 'move';
-  cleanWinTitle.style.userSelect = 'none';
-
-  function onCleanWinDragMove(e) {
-    if (!cleanWinDragging) return;
-    const newLeft = e.clientX - cleanWinOffsetX;
-    const newTop = e.clientY - cleanWinOffsetY;
-    const maxLeft = window.innerWidth - cleanWin.offsetWidth - 10;
-    const maxTop = window.innerHeight - cleanWin.offsetHeight - 10;
-    cleanWin.style.left = Math.max(10, Math.min(newLeft, maxLeft)) + 'px';
-    cleanWin.style.top = Math.max(10, Math.min(newTop, maxTop)) + 'px';
-    cleanWin.style.right = 'auto';
-    cleanWin.style.bottom = 'auto';
-  }
-
-  function onCleanWinDragEnd() {
-    if (!cleanWinDragging) return;
-    cleanWinDragging = false;
-    document.body.style.userSelect = '';
-    cleanWin.style.transition = '';
-    cleanWinTitle.style.opacity = '';
-    document.removeEventListener('mousemove', onCleanWinDragMove);
-    document.removeEventListener('mouseup', onCleanWinDragEnd);
-  }
-
-  cleanWinTitle.addEventListener('mousedown', function (e) {
-    cleanWinDragging = true;
-    cleanWinOffsetX = e.clientX - cleanWin.offsetLeft;
-    cleanWinOffsetY = e.clientY - cleanWin.offsetTop;
-    document.body.style.userSelect = 'none';
-    cleanWin.style.transition = 'none';
-    cleanWinTitle.style.opacity = '0.8';
-    document.addEventListener('mousemove', onCleanWinDragMove);
-    document.addEventListener('mouseup', onCleanWinDragEnd);
-  });
-
-  // --------- 日志窗口（固定暗色终端风格） ---------
-  const debugWin = document.createElement('div');
-  debugWin.id = 'bili-debug-panel';
-  debugWin.innerHTML = `<div class="bili-debug-title">调试日志</div><textarea id="bili-debug-log" readonly style="width:100%;height:150px;"></textarea><button class="bili-debug-close">关闭</button>`;
-  document.body.appendChild(debugWin);
-  debugWin.style.display = 'none';
-
-  // --------- 自动清理设置面板 ---------
+  // --------- 自动清理配置存储（功能核心） ---------
+  // 类别开关与旧版一致；freq/keep 为新 UI 的自动清理配置（保留语义仅展示，不实际限定删除范围）
   const SETTINGS_KEY = 'bili-auto-clean-settings';
-  const defaultSettings = { enabled: false, types: { reply: true, like: true, at: true, pm: false, history: false, system: false }, delay: 5 };
+  const defaultSettings = { types: { reply: true, like: true, at: true, pm: true, history: true, system: true }, freq: '关闭', keep: '一周', theme: 'dark' };
   function loadSettings() {
     try {
       const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
@@ -479,93 +105,20 @@
   }
   function saveSettings(s) { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }
 
-  const settingsWin = document.createElement('div');
-  settingsWin.id = 'bili-settings-panel';
-  const st = loadSettings();
-  settingsWin.innerHTML = `
-      <div class="bili-settings-title bili-settings-drag-handle">自动清理设置</div>
-      <div class="bili-settings-sub">页面加载时自动清理指定消息</div>
-      <div class="bili-settings-body">
-        <div class="bili-settings-row bili-settings-toggle-row">
-          <label class="bili-settings-toggle">
-            <input type="checkbox" id="bili-auto-enable" ${st.enabled ? 'checked' : ''}>
-            <span class="bili-toggle-track"><span class="bili-toggle-thumb"></span></span>
-          </label>
-          <span class="bili-toggle-label">${st.enabled ? '已启用' : '已关闭'}</span>
-        </div>
-        <div class="bili-settings-divider"></div>
-        <div class="bili-settings-section-title">清理项目</div>
-        <div class="bili-settings-types">
-          <label class="bili-type-chip"><input type="checkbox" class="bili-auto-type" data-type="reply" ${st.types.reply ? 'checked' : ''}> 回复</label>
-          <label class="bili-type-chip"><input type="checkbox" class="bili-auto-type" data-type="like" ${st.types.like ? 'checked' : ''}> 赞我</label>
-          <label class="bili-type-chip"><input type="checkbox" class="bili-auto-type" data-type="at" ${st.types.at ? 'checked' : ''}> 艾特</label>
-          <label class="bili-type-chip"><input type="checkbox" class="bili-auto-type" data-type="pm" ${st.types.pm ? 'checked' : ''}> 私信</label>
-          <label class="bili-type-chip"><input type="checkbox" class="bili-auto-type" data-type="history" ${st.types.history ? 'checked' : ''}> 历史</label>
-          <label class="bili-type-chip"><input type="checkbox" class="bili-auto-type" data-type="system" ${st.types.system ? 'checked' : ''}> 系统</label>
-        </div>
-        <div class="bili-settings-divider"></div>
-        <div class="bili-settings-row bili-settings-delay-row">
-          <span class="bili-settings-section-title" style="margin:0">延迟启动</span>
-          <select id="bili-auto-delay">
-            <option value="3" ${st.delay===3?'selected':''}>3 秒</option>
-            <option value="5" ${st.delay===5?'selected':''}>5 秒</option>
-            <option value="10" ${st.delay===10?'selected':''}>10 秒</option>
-            <option value="30" ${st.delay===30?'selected':''}>30 秒</option>
-          </select>
-        </div>
-      </div>
-      <button class="bili-settings-save"><span class="bili-btn-glow"></span>保存设置</button>
-      <button class="bili-settings-close">关闭</button>
-    `;
-  document.body.appendChild(settingsWin);
-  settingsWin.style.display = 'none';
+  // --------- 进度 / 结果上报接口（UI 实现） ---------
+  // report(typeKey, statusText, resultText): typeKey ∈ reply|like|at|pm|history|system
+  // onProgress(ratio): 0~1 清理进度
+  let report = () => {};
+  let onProgress = () => {};
 
-  const toggleEnable = settingsWin.querySelector('#bili-auto-enable');
-  const toggleLabel = settingsWin.querySelector('.bili-toggle-label');
-  toggleEnable.addEventListener('change', () => {
-    toggleLabel.textContent = toggleEnable.checked ? '已启用' : '已关闭';
-  });
+  // 类别数字 → 英文 key（与旧 typeMap 一致：0=赞我 1=回复 2=艾特 3=私信 4=历史 5=系统）
+  const TYPE_KEY = { 0: 'like', 1: 'reply', 2: 'at', 3: 'pm', 4: 'history', 5: 'system' };
 
-  settingsWin.querySelector('.bili-settings-save').onclick = () => {
-    const s = {
-      enabled: toggleEnable.checked,
-      types: {},
-      delay: parseInt(settingsWin.querySelector('#bili-auto-delay').value)
-    };
-    settingsWin.querySelectorAll('.bili-auto-type').forEach(cb => { s.types[cb.dataset.type] = cb.checked; });
-    saveSettings(s);
-    log('自动清理设置已保存');
-    settingsWin.style.display = 'none';
-  };
-  settingsWin.querySelector('.bili-settings-close').onclick = () => { settingsWin.style.display = 'none'; };
-
-  // --------- 菜单点击切换窗口 ---------
-  menu.onclick = function (e) {
-    const item = e.target.closest('[data-win]');
-    if (!item) return;
-    const win = item.dataset.win;
-    cleanWin.style.display = 'none';
-    debugWin.style.display = 'none';
-    settingsWin.style.display = 'none';
-    if (win === 'clean') cleanWin.style.display = 'block';
-    if (win === 'debug') debugWin.style.display = 'block';
-    if (win === 'settings') settingsWin.style.display = 'block';
-    if (win === 'author') window.open('https://space.bilibili.com/210900168', '_blank');
-    if (win === 'donate') donateWin.style.display = 'block';
-    menuVisible = false;
-    menu.style.display = 'none';
-  };
-  cleanWin.querySelector('.bili-clean-close').onclick = () => {
-    cleanWin.style.display = 'none';
-  };
-  debugWin.querySelector('.bili-debug-close').onclick = () => {
-    debugWin.style.display = 'none';
-  };
-
-  // --------- 批量清理逻辑 ---------
-  async function cleanType(type, statusId, resultId) {
+  // --------- 批量清理逻辑（功能核心，已脱钩 UI） ---------
+  async function cleanType(type) {
+    const key = TYPE_KEY[type] || 'unknown';
     let succ = 0;
-    let last_id = '', last_time = '', isEnd = false; // renamed is_end → isEnd
+    let last_id = '', last_time = '', isEnd = false;
     let api, getItems, getCursor;
     if (type === 0) {
       api = (id, time) => `https://api.bilibili.com/x/msgfeed/like?id=${id}&like_time=${time}&platform=web&build=0&mobi_app=web`;
@@ -580,18 +133,14 @@
       getItems = res => res.data?.items || [];
       getCursor = res => res.data?.cursor || {};
     } else if (type === 3) {
-      // 私信删除特殊处理
-      return await cleanPrivateMessages(statusId, resultId);
+      return await cleanPrivateMessages(key);
     } else if (type === 4) {
-      // 历史记录清空特殊处理
-      return await clearHistory(statusId, resultId);
+      return await clearHistory(key);
     } else if (type === 5) {
-      // 系统消息清空特殊处理
-      return await clearSystemMessages(statusId, resultId);
+      return await clearSystemMessages(key);
     }
     let total = 0, done = 0;
-    progressBarWrap.style.display = 'block';
-    progressBar.style.width = '0';
+    onProgress(0);
     const firstRes = await biliGet(api(last_id, last_time));
     if (firstRes && firstRes.code === 0) {
       total = getItems(firstRes).length * 10;
@@ -608,7 +157,7 @@
       const items = getItems(pageRes);
       if (!items.length) {
         log('接口items为空，记录已清空或无待清理项目');
-        document.getElementById(resultId).textContent = '记录为空';
+        report(key, '记录为空', '');
         break;
       }
       for (let i = 0; i < items.length; i++) {
@@ -616,10 +165,9 @@
         let delRes = await testDeleteMsg(id, type);
         log(`删除id=${id} 结果: ${delRes.ok ? '成功' : '失败'} ${delRes.msg}`);
         if (delRes.ok) succ++;
-        document.getElementById(statusId).textContent = `${succ}`;
-        animateRowStatus(statusId.replace('clean-status-', '')); // make animateRowStatus used
+        report(key, `${succ}`, '');
         done++;
-        progressBar.style.width = total ? Math.min(100, Math.round(done / total * 100)) + '%' : '30%';
+        onProgress(total ? Math.min(1, done / total) : 0.3);
         await new Promise(r => setTimeout(r, 150));
       }
       const cursor = getCursor(pageRes);
@@ -628,25 +176,25 @@
       last_time = cursor.time || '';
       if (isEnd) break;
     }
-    progressBar.style.width = '100%';
-    setTimeout(() => progressBarWrap.style.display = 'none', 800);
-
-    // 优化结果显示逻辑
-    const currentResult = document.getElementById(resultId).textContent;
-    if (currentResult !== '记录为空') {
-      document.getElementById(resultId).textContent = succ > 0 ? '清理完成' : '清理失败';
-    }
+    onProgress(1);
+    report(key, `${succ}`, succ > 0 ? '清理完成' : '清理失败');
     log(`类型${type}清理结束，成功${succ}条`);
   }
 
-  // --------- 私信删除逻辑 ---------
-  async function cleanPrivateMessages(statusId, resultId) {
+  // --------- 私信删除逻辑 ----------
+  async function cleanPrivateMessages(key) {
     let succ = 0;
     let hasMore = true;
     let consecutiveFailures = 0;
     const MAX_CONSECUTIVE_FAILS = 3;
+    let rounds = 0;
+    const MAX_ROUNDS = 50;
     while (hasMore) {
       if (cleanCancelled) { log('用户取消私信清理'); break; }
+      if (++rounds > MAX_ROUNDS) {
+        log(`私信清理已达最大轮次(${MAX_ROUNDS})，停止以防死循环`);
+        break;
+      }
       try {
         const res = await biliGet('https://api.vc.bilibili.com/session_svr/v1/session_svr/get_sessions?session_type=1');
 
@@ -655,25 +203,20 @@
           break;
         }
 
-        const sessions = res.data?.['session_list'] || []; // bracket notation avoids unresolved warning
+        const sessions = res.data?.['session_list'] || [];
         if (sessions.length === 0) {
           log('私信列表为空，清理完毕');
-          // 如果是第一次检查就发现为空，说明本来就没有私信，应该显示"记录为空"
-          if (succ === 0) {
-            document.getElementById(resultId).textContent = '记录为空';
-          }
           break;
         }
 
         let batchFails = 0;
         for (let i = 0; i < sessions.length; i++) {
           if (cleanCancelled) break;
-          const talkerId = sessions[i]['talker_id']; // bracket notation avoids unresolved warning
+          const talkerId = sessions[i]['talker_id'];
           const delRes = await deletePrivateMessage(talkerId);
           if (delRes.ok) { succ++; consecutiveFailures = 0; }
           else { batchFails++; consecutiveFailures++; }
-          document.getElementById(statusId).textContent = `${succ}`;
-          animateRowStatus(statusId.replace('clean-status-', '')); // animate row
+          report(key, `${succ}`, '');
           await new Promise(r => setTimeout(r, 150));
         }
 
@@ -692,54 +235,42 @@
         break;
       }
     }
-    // 优化结果显示逻辑
-    const currentResult = document.getElementById(resultId).textContent;
-    if (currentResult !== '记录为空') {
-      document.getElementById(resultId).textContent = succ > 0 ? '清理完成' : '清理失败';
-    }
+    report(key, succ > 0 ? '清理完成' : '记录为空', '');
     log(`私信清理结束，成功${succ}条`);
   }
 
-  // --------- 历史记录清空逻辑 ---------
-  async function clearHistory(statusId, resultId) {
+  // --------- 历史记录清空逻辑 ----------
+  async function clearHistory(key) {
     try {
       log('开始清空历史记录');
-      document.getElementById(statusId).textContent = '处理中...';
-
+      report(key, '处理中...', '');
       const csrf = getCsrf();
       const res = await biliPost('https://api.bilibili.com/x/v2/history/clear', `jsonp=jsonp&csrf=${csrf}`);
-
-      document.getElementById(statusId).textContent = res.ok ? '1' : '0';
-      document.getElementById(resultId).textContent = res.ok ? '清理完成' : '清理失败';
+      report(key, res.ok ? 'clear' : '0', res.ok ? '清理完成' : '清理失败');
       log(`历史记录清空结果: ${res.msg}`);
     } catch (e) {
       log(`历史记录清空异常: ${e}`);
-      document.getElementById(statusId).textContent = '0';
-      document.getElementById(resultId).textContent = '清理失败';
+      report(key, '0', '清理失败');
     }
   }
 
-  // --------- 系统消息清空逻辑 ---------
-  async function clearSystemMessages(statusId, resultId) {
+  // --------- 系统消息清空逻辑 ----------
+  async function clearSystemMessages(key) {
     try {
       log('开始清空系统消息');
-      document.getElementById(statusId).textContent = '处理中...';
-
+      report(key, '处理中...', '');
       const csrf = getCsrf();
       const url = `https://message.bilibili.com/x/sys-msg/del_notify_list?build=7650400&mobi_app=android&csrf=${csrf}`;
       const res = await biliPost(url, { type: 4, build: 7650400, mobi_app: "android" }, true);
-
-      document.getElementById(statusId).textContent = res.ok ? '1' : '0';
-      document.getElementById(resultId).textContent = res.ok ? '清理完成' : '清理失败';
+      report(key, res.ok ? 'clear' : '0', res.ok ? '清理完成' : '清理失败');
       log(`系统消息清空结果: ${res.msg}`);
     } catch (e) {
       log(`系统消息清空异常: ${e}`);
-      document.getElementById(statusId).textContent = '0';
-      document.getElementById(resultId).textContent = '清理失败';
+      report(key, '0', '清理失败');
     }
   }
 
-  // --------- 删除私信函数 ---------
+  // --------- 删除私信函数 ----------
   async function deletePrivateMessage(talkerId) {
     if (!talkerId) {
       log(`私信删除参数不完整，跳过删除操作: talkerId=${talkerId}`);
@@ -751,48 +282,9 @@
     return await biliPost('https://api.vc.bilibili.com/session_svr/v1/session_svr/remove_session', params);
   }
 
-  let cleanCancelled = false, isCleaning = false;
-  const cleanBtn = cleanWin.querySelector('#bili-clean-start');
-  const cleanBtnText = cleanBtn.querySelector('.bili-btn-text');
+  let cleanCancelled = false;
 
-  function setCleanBtnState(running) {
-    isCleaning = running;
-    cleanBtnText.textContent = running ? '停止清理' : '开始清理';
-    cleanBtn.classList.toggle('cleaning', running);
-  }
-
-  cleanBtn.onclick = async function () {
-    if (isCleaning) {
-      cleanCancelled = true;
-      cleanBtnText.textContent = '正在停止...';
-      return;
-    }
-    cleanCancelled = false;
-    setCleanBtnState(true);
-    ['reply', 'like', 'at', 'pm', 'history', 'system'].forEach(t => {
-      document.getElementById('clean-status-' + t).textContent = '0';
-      document.getElementById('clean-res-' + t).textContent = '';
-    });
-    const tasks = [
-      { id: 'clean-reply', type: 1, status: 'clean-status-reply', result: 'clean-res-reply' },
-      { id: 'clean-like', type: 0, status: 'clean-status-like', result: 'clean-res-like' },
-      { id: 'clean-at', type: 2, status: 'clean-status-at', result: 'clean-res-at' },
-      { id: 'clean-pm', type: 3, status: 'clean-status-pm', result: 'clean-res-pm' },
-      { id: 'clean-history', type: 4, status: 'clean-status-history', result: 'clean-res-history' },
-      { id: 'clean-system', type: 5, status: 'clean-status-system', result: 'clean-res-system' }
-    ];
-    for (const task of tasks) {
-      if (cleanCancelled) break;
-      if (document.getElementById(task.id).checked) {
-        document.getElementById(task.status).textContent = '0';
-        await cleanType(task.type, task.status, task.result);
-      }
-    }
-    if (cleanCancelled) log('清理已被用户取消');
-    setCleanBtnState(false);
-  };
-
-  // --------- 获取消息id和单条删除函数 ---------
+  // --------- 单条删除函数 ----------
   async function testDeleteMsg(id, type) {
     if (!id || type === undefined || type === null) {
       log(`参数不完整，跳过删除操作: id=${id}, type=${type}`);
@@ -804,625 +296,402 @@
     return await biliPost('https://api.bilibili.com/x/msgfeed/del', params);
   }
 
-  // --------- 清理进度条 ---------
-  const progressBarWrap = document.createElement('div');
-  progressBarWrap.id = 'bili-clean-progress';
-  progressBarWrap.style.height = '8px';
-  progressBarWrap.style.background = '#fff3';
-  progressBarWrap.style.borderRadius = '4px';
-  progressBarWrap.style.overflow = 'hidden';
-  progressBarWrap.style.margin = '10px 0';
-  progressBarWrap.style.display = 'none';
-  const progressBar = document.createElement('div');
-  progressBar.id = 'bili-clean-progress-bar';
-  progressBar.style.height = '100%';
-  progressBar.style.width = '0';
-  progressBar.style.background = 'linear-gradient(90deg,#a18cd1,#fbc2eb)';
-  progressBar.style.transition = 'width 0.3s';
-  progressBarWrap.appendChild(progressBar);
-  cleanWin.insertBefore(progressBarWrap, cleanWin.querySelector('.bili-clean-table'));
-
-  // --------- 样式（美化升级+缩小+终端风格日志） ---------
-  const style = document.createElement('style');
-  style.innerHTML = `
-      @keyframes biliButtonPulse {
-        0% { transform: scale(1); }
-        50% { transform: scale(1.15); }
-        100% { transform: scale(1); }
-      }
-      @keyframes biliFloat {
-        0%, 100% { transform: translateY(0px); }
-        50% { transform: translateY(-6px); }
-      }
-      #bili-float-btn svg {
-        transition: filter 0.3s;
-      }
-      #bili-float-btn { transition: transform 0.2s; }
-      @keyframes biliGlow {
-        0% { opacity: 0.5; }
-        100% { opacity: 0.9; }
-      }
-      #bili-float-menu {
-        box-shadow: 0 6px 24px #a18cd144;
-        animation: biliMenuPop 0.3s cubic-bezier(.5,1.8,.5,1) both;
-        backdrop-filter: blur(10px) saturate(1.2);
-        background: rgba(255,255,255,0.85);
-        border: 1.2px solid #fff4;
-        border-radius: 16px;
-        min-width: 90px;
-        font-size: 0.95rem;
-        padding: 8px 0;
-      }
-      #bili-clean-panel {
-        position: fixed; right: 60px; bottom: 30px; width: 320px;
-        background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
-        border-radius: 20px; box-shadow: 0 10px 40px #a18cd144, 0 2px 8px #fff8;
-        padding: 20px 18px 14px 18px; z-index: 100002;
-        font-family: 'Microsoft Yahei', 'SimSun', Arial, sans-serif; color: #fff;
-        transform-style: preserve-3d;
-        animation: biliPanelIn 0.5s cubic-bezier(.5,1.8,.5,1);
-        backdrop-filter: blur(10px) saturate(1.2);
-        border: 1.5px solid #fff4;
-      }
-      @keyframes biliPanelIn {
-        0% { opacity:0; transform:rotateY(30deg) scale(0.7) translateY(24px); }
-        100% { opacity:1; transform:rotateY(0) scale(1) translateY(0); }
-      }
-      .bili-clean-title { 
-        font-size: 1.35rem; 
-        font-weight: bold; 
-        letter-spacing: 1px; 
-        text-align: center; 
-        text-shadow: 0 2px 8px #a18cd1cc; 
-        padding: 4px 0;
-        border-radius: 12px 12px 0 0;
-        transition: background 0.2s, opacity 0.2s;
-      }
-      .bili-clean-drag-handle:hover {
-        background: rgba(255,255,255,0.1);
-        cursor: move;
-      }
-      .bili-clean-drag-handle:active {
-        background: rgba(255,255,255,0.2);
-        opacity: 0.8;
-      }
-      .bili-clean-sub { font-size: 0.95rem; margin-top: 2px; color: #f3e6ff; text-align: center; margin-bottom: 10px; }
-      .bili-clean-options { margin: 10px 0 10px 0; }
-      .bili-clean-row { display: flex; justify-content: space-between; margin-bottom: 6px; }
-      .bili-clean-row label { background: rgba(255,255,255,0.13); border-radius: 8px; padding: 5px 10px; font-size: 0.98rem; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow:0 1px 2px #fff2; transition: background 0.18s, box-shadow 0.18s; }
-      .bili-clean-row label:hover { 
-        background: #f3e6ff; 
-        color: #a18cd1; 
-        box-shadow: 0 2px 6px #a18cd1aa; 
-        transform: translateY(-1px) scale(1.02);
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-      }
-      .bili-clean-row input[type="checkbox"] { accent-color: #a18cd1; width: 15px; height: 15px; }
-      .bili-clean-btn { width: 100%; margin: 10px 0 10px 0; padding: 10px 0; background: linear-gradient(90deg, #7f7fd5 0%, #86a8e7 50%, #91eac9 100%); border: none; border-radius: 12px; font-size: 1.05rem; font-weight: bold; color: #fff; cursor: pointer; box-shadow: 0 2px 8px #a18cd110; transition: background 0.2s, box-shadow 0.2s; position:relative; overflow:hidden; }
-      .bili-btn-glow { position:absolute; left:0; top:0; width:100%; height:100%; border-radius:12px; box-shadow:0 0 16px 4px #fbc2eb88, 0 0 6px 1px #a18cd1cc; pointer-events:none; opacity:0.5; animation:biliGlow 2.2s infinite alternate cubic-bezier(.5,1.8,.5,1); z-index:0; }
-      .bili-clean-btn span { z-index:1; position:relative; }
-      .bili-clean-btn:hover { 
-        background: linear-gradient(90deg, #91eac9 0%, #86a8e7 50%, #7f7fd5 100%); 
-        box-shadow: 0 6px 18px #a18cd1cc; 
-        transform: translateY(-2px) scale(1.02);
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      }
-      .bili-clean-table { background: rgba(255,255,255,0.13); border-radius: 10px; padding: 6px 0 0 0; margin-top: 6px; box-shadow:0 1px 4px #fff2; }
-      .bili-clean-thead, .bili-clean-tbody > div { display: flex; justify-content: space-between; padding: 6px 10px; font-size: 0.98rem; }
-      .bili-clean-thead { font-weight: bold; color: #e0d7ff; border-bottom: 1px solid rgba(255,255,255,0.18); }
-      .bili-clean-tbody > div { border-bottom: 1px solid rgba(255,255,255,0.09); color: #fff; transition: background 0.18s; }
-      .bili-clean-tbody > div:last-child { border-bottom: none; }
-      .bili-clean-tbody > div[data-anim] { animation: biliRowAnim 0.5s cubic-bezier(.5,1.8,.5,1); }
-      @keyframes biliRowAnim { 0%{background:#fbc2eb44;} 100%{background:transparent;} }
-      .bili-clean-close { width: 100%; margin: 10px 0 0 0; padding: 7px 0; background: rgba(255,255,255,0.22); border: none; border-radius: 8px; font-size: 0.98rem; color: #fff; cursor: pointer; transition: background 0.18s; }
-      .bili-clean-close:hover { 
-        background: rgba(255,255,255,0.32); 
-        transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(161, 140, 209, 0.3);
-      }
-      #bili-debug-panel {
-        position: fixed; right: 60px; bottom: 30px; width: 340px; background: #181c20; border-radius: 10px; box-shadow: 0 8px 24px #000a, 0 2px 8px #2228; z-index: 100002; color: #e0e0e0; font-family: 'Fira Mono', 'Consolas', 'Menlo', 'monospace'; padding: 14px 14px 10px 14px; animation: biliPanelIn 0.5s cubic-bezier(.5,1.8,.5,1); border: 1.5px solid #222; }
-      .bili-debug-title { font-size: 1.05rem; font-weight: bold; margin-bottom: 10px; text-align: center; color: #7fffd4; letter-spacing: 1px; }
-      #bili-debug-log {
-        background: #181c20;
-        border-radius: 6px;
-        border: 1px solid #222;
-        color: #e0e0e0;
-        font-size: 0.92rem;
-        font-family: 'Fira Mono', 'Consolas', 'Menlo', 'monospace';
-        box-shadow: 0 2px 8px #0004 inset;
-        padding: 8px;
-        outline: none;
-        resize: none;
-        line-height: 1.5;
-        transition: border 0.2s;
-      }
-      #bili-debug-log::-webkit-scrollbar { width: 6px; background: #222; }
-      #bili-debug-log::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-      .bili-debug-close {
-        width: 100%; margin: 10px 0 0 0; padding: 7px 0; background: #23272e; border: none; border-radius: 8px; font-size: 0.98rem; color: #7fffd4; cursor: pointer; transition: background 0.18s, color 0.18s;
-      }
-      .bili-debug-close:hover { 
-        background: #222; 
-        color: #fff176; 
-        transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(127, 255, 212, 0.3);
-      }
-      #bili-clean-progress { box-shadow: 0 2px 6px #a18cd1aa; background: rgba(255,255,255,0.22); border: 1px solid #fff4; height: 5px !important; border-radius: 3px !important; }
-      #bili-clean-progress-bar { border-radius: 3px; }
-      /* 主题切换动画 */
-      #bili-clean-panel, #bili-float-menu {
-        transition: background 0.4s, color 0.4s, box-shadow 0.4s;
-      }
-      /* 悬浮按钮/菜单动效增强 */
-      #bili-float-btn:hover {
-        transform: scale(1.18) rotate(-8deg);
-      }
-      @keyframes biliMenuPop {
-        0% { opacity:0; transform:scale(0.7) translateY(16px);}
-        80% { transform:scale(1.08) translateY(-4px);}
-        100% { opacity:1; transform:scale(1) translateY(0);}
-      }
-      /* 菜单关闭淡出动画 */
-      @keyframes biliMenuFadeOut {
-        0% { opacity:1; }
-        100% { opacity:0; }
-      }
-      /* 进度条美化 */
-      #bili-clean-progress-bar {
-        background: linear-gradient(90deg,#a18cd1,#fbc2eb,#a18cd1);
-        background-size: 200% 100%;
-        animation: biliProgressMove 1.2s linear infinite;
-        box-shadow: 0 2px 8px #a18cd1aa;
-      }
-      @keyframes biliProgressMove {
-        0% { background-position: 0 0; }
-        100% { background-position: 100% 0; }
-      }
-      /* 进度条完成闪光 */
-      #bili-clean-progress-bar.flash {
-        animation: biliProgressMove 1.2s linear infinite, biliProgressFlash 0.6s;
-      }
-      @keyframes biliProgressFlash {
-        0% { filter: brightness(1.2) drop-shadow(0 0 8px #fff8); }
-        60% { filter: brightness(2.2) drop-shadow(0 0 24px #fff8); }
-        100% { filter: brightness(1) drop-shadow(0 0 0 #fff0); }
-      }
-      /* 主题色块选中动画 */
-      .bili-theme-dot.active{
-        box-shadow:0 0 0 3px #fbc2eb,0 2px 8px #a18cd1cc;border:2.5px solid #f78ca2;transform:scale(1.18);transition:transform 0.18s, box-shadow 0.18s, border 0.18s;
-      }
-      /* 清理按钮loading动画 */
-      .bili-clean-btn.cleaning { background: linear-gradient(90deg, #ef4444, #f97316); animation: biliButtonPulse 1.5s ease-in-out infinite; }
-      .bili-clean-btn.cleaning:hover { background: linear-gradient(90deg, #dc2626, #ea580c); box-shadow: 0 6px 18px rgba(239,68,68,0.4); }
-      .bili-btn-text { position: relative; z-index: 1; }
-      .bili-clean-btn.loading { pointer-events:none; opacity:0.7; position:relative; }
-      .bili-clean-btn .bili-btn-loading {
-        display:inline-block; width:18px; height:18px; vertical-align:middle; margin-right:6px;
-        border:2.5px solid #fff4; border-top:2.5px solid #a18cd1; border-radius:50%; animation: biliBtnSpin 0.8s linear infinite;
-      }
-      @keyframes biliBtnSpin { 100% { transform: rotate(360deg); } }
-      /* 表格三列对齐优化 */
-      .bili-clean-thead span, .bili-clean-tbody > div > span {
-        display: inline-block;
-        text-align: center;
-      }
-      .bili-clean-thead span:nth-child(1), .bili-clean-tbody > div > span:nth-child(1) { width: 60px; text-align: left; }
-      .bili-clean-thead span:nth-child(2), .bili-clean-tbody > div > span:nth-child(2) { width: 50px; }
-      .bili-clean-thead span:nth-child(3), .bili-clean-tbody > div > span:nth-child(3) { width: 80px; text-align: right; }
-      /* 选项按钮对齐优化 */
-      .bili-clean-row label {
-        flex: 1 1 0;
-        text-align: center;
-        min-width: 0;
-        margin: 0 4px;
-        justify-content: center;
-      }
-      .bili-clean-row {
-        gap: 0;
-      }
-      #bili-donate-panel {
-        position: fixed; right: 50%; bottom: 50%; transform: translate(50%,50%);
-        background: #fff; border-radius: 18px; box-shadow: 0 8px 32px #a18cd1aa, 0 2px 8px #fff8;
-        z-index: 100003; padding: 28px 28px 18px 28px; text-align: center; min-width: 260px;
-        font-family: 'Microsoft Yahei', Arial, sans-serif; color: #333;
-        animation: biliPanelIn 0.5s cubic-bezier(.5,1.8,.5,1);
-      }
-      .bili-donate-title { font-size: 1.18rem; font-weight: bold; margin-bottom: 10px; color: #a18cd1; }
-      .bili-donate-img { width: 180px; height: 180px; border-radius: 12px; box-shadow: 0 2px 16px #a18cd1aa; margin-bottom: 10px; }
-      .bili-donate-tip { color: #888; font-size: 0.98rem; margin-bottom: 12px; }
-      .bili-donate-close { padding: 7px 0; width: 100%; border: none; border-radius: 8px; background: #f3e6ff; color: #a18cd1; font-size: 1rem; cursor: pointer; transition: background 0.18s; }
-      .bili-donate-close:hover { 
-        background: #a18cd1; 
-        color: #fff; 
-        transform: translateY(-1px) scale(1.02);
-        box-shadow: 0 4px 12px rgba(161, 140, 209, 0.4);
-      }
-      #bili-settings-panel {
-        position: fixed; right: 60px; bottom: 30px; width: 320px;
-        background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
-        border-radius: 20px; box-shadow: 0 10px 40px #a18cd144, 0 2px 8px #fff8;
-        padding: 20px 18px 14px 18px; z-index: 100002;
-        font-family: 'Microsoft Yahei', 'SimSun', Arial, sans-serif; color: #fff;
-        animation: biliPanelIn 0.5s cubic-bezier(.5,1.8,.5,1);
-        backdrop-filter: blur(10px) saturate(1.2);
-        border: 1.5px solid #fff4;
-      }
-      .bili-settings-title {
-        font-size: 1.35rem; font-weight: bold; letter-spacing: 1px; text-align: center;
-        text-shadow: 0 2px 8px #a18cd1cc; padding: 4px 0; border-radius: 12px 12px 0 0;
-        transition: background 0.2s, opacity 0.2s;
-      }
-      .bili-settings-drag-handle { cursor: move; }
-      .bili-settings-drag-handle:hover { background: rgba(255,255,255,0.1); }
-      .bili-settings-drag-handle:active { background: rgba(255,255,255,0.2); opacity: 0.8; }
-      .bili-settings-sub { font-size: 0.88rem; color: #f3e6ff; text-align: center; margin-bottom: 12px; }
-      .bili-settings-body { background: rgba(255,255,255,0.13); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
-      .bili-settings-divider { height: 1px; background: rgba(255,255,255,0.15); margin: 10px 0; }
-      .bili-settings-section-title { font-size: 0.85rem; color: #e0d7ff; font-weight: bold; letter-spacing: 0.5px; margin-bottom: 8px; }
-      .bili-settings-row { display: flex; align-items: center; justify-content: space-between; }
-      .bili-settings-toggle-row { gap: 10px; }
-      .bili-settings-toggle { position: relative; display: inline-block; width: 40px; height: 22px; cursor: pointer; }
-      .bili-settings-toggle input { opacity: 0; width: 0; height: 0; }
-      .bili-toggle-track { position: absolute; inset: 0; background: rgba(255,255,255,0.2); border-radius: 11px; transition: background 0.25s; }
-      .bili-settings-toggle input:checked + .bili-toggle-track { background: rgba(76,175,80,0.7); }
-      .bili-toggle-thumb { position: absolute; left: 2px; top: 2px; width: 18px; height: 18px; background: #fff; border-radius: 50%; transition: transform 0.25s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
-      .bili-settings-toggle input:checked + .bili-toggle-track .bili-toggle-thumb { transform: translateX(18px); }
-      .bili-toggle-label { font-size: 0.92rem; color: #fff; }
-      .bili-settings-types { display: flex; flex-wrap: wrap; gap: 6px; }
-      .bili-type-chip {
-        background: rgba(255,255,255,0.13); border-radius: 8px; padding: 5px 12px; font-size: 0.92rem;
-        cursor: pointer; display: flex; align-items: center; gap: 5px; transition: background 0.18s, transform 0.18s;
-      }
-      .bili-type-chip:hover { background: rgba(255,255,255,0.25); transform: translateY(-1px) scale(1.02); }
-      .bili-type-chip input[type="checkbox"] { accent-color: #a18cd1; width: 14px; height: 14px; }
-      .bili-settings-delay-row { margin-top: 2px; }
-      .bili-settings-delay-row select {
-        padding: 4px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.3);
-        background: rgba(255,255,255,0.15); color: #fff; font-size: 0.88rem; cursor: pointer;
-        backdrop-filter: blur(4px);
-      }
-      .bili-settings-delay-row select option { background: #333; color: #fff; }
-      .bili-settings-save {
-        width: 100%; margin: 8px 0 6px 0; padding: 10px 0; background: linear-gradient(90deg, #7f7fd5 0%, #86a8e7 50%, #91eac9 100%);
-        border: none; border-radius: 12px; font-size: 1.02rem; font-weight: bold; color: #fff;
-        cursor: pointer; position: relative; overflow: hidden; transition: transform 0.2s, box-shadow 0.2s;
-      }
-      .bili-settings-save:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 6px 18px #a18cd1cc; }
-      .bili-settings-close {
-        width: 100%; margin: 0; padding: 7px 0; background: rgba(255,255,255,0.22); border: none;
-        border-radius: 8px; font-size: 0.95rem; color: #fff; cursor: pointer; transition: background 0.18s;
-      }
-      .bili-settings-close:hover { background: rgba(255,255,255,0.32); transform: translateY(-1px); }
-    `;
-  document.head.appendChild(style);
-
-  // --------- 清理窗口动效输出优化 ---------
-  function animateRowStatus(type) {
-    const row = document.querySelector(`#clean-status-${type}`)?.parentElement;
-    if (row) {
-      row.setAttribute('data-anim', '1');
-      setTimeout(() => row.removeAttribute('data-anim'), 600);
-    }
-  }
-
-  // 在批量清理和单条清理时调用 animateRowStatus(type)
-  // 例如: animateRowStatus('reply');
-
-  // --------- ESC关闭窗口 ---------
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') {
-      [cleanWin, debugWin, settingsWin, donateWin].forEach(win => {
-        if (win.style.display === 'block') win.style.display = 'none';
-      });
-    }
-  });
-
-  // --------- 主题切换 ---------
-  const THEMES = {
-    dark: {
-      name: '酷雅黑',
-      main: '#181c20',
-      btn: '#23272e',
-      shadow: '#000a',
-      accent: '#7fffd4',
-      font: '#e0e0e0',
-      table: '#23272e',
-      label: '#23272e',
-      hover: '#23272e',
-      border: '#222',
-      dot: 'linear-gradient(135deg,#23272e,#7fffd4)',
-      sakura: '#7fffd4',
-      sakuraCenter: '#4de8c2'
-    },
-    pink: {
-      name: '可爱粉',
-      main: '#fdf2f8',
-      btn: '#ec4899',
-      shadow: '#ec489933',
-      accent: '#ec4899',
-      font: '#831843',
-      table: '#fce7f3',
-      label: '#fce7f3',
-      hover: '#fbcfe8',
-      border: '#ec4899',
-      dot: '#ec4899',
-      sakura: '#fb7185',
-      sakuraCenter: '#e11d48'
-    },
-    blue: {
-      name: '清新蓝',
-      main: '#eff6ff',
-      btn: '#2563eb',
-      shadow: '#2563eb33',
-      accent: '#2563eb',
-      font: '#1e3a5f',
-      table: '#dbeafe',
-      label: '#dbeafe',
-      hover: '#bfdbfe',
-      border: '#2563eb',
-      dot: '#2563eb',
-      sakura: '#60a5fa',
-      sakuraCenter: '#1d4ed8'
-    },
-    green: {
-      name: '治愈绿',
-      main: '#ecfdf5',
-      btn: '#059669',
-      shadow: '#05966933',
-      accent: '#059669',
-      font: '#064e3b',
-      table: '#d1fae5',
-      label: '#d1fae5',
-      hover: '#a7f3d0',
-      border: '#059669',
-      dot: '#059669',
-      sakura: '#34d399',
-      sakuraCenter: '#047857'
-    },
-    high: {
-      name: '高对比',
-      main: '#f5f3ff',
-      btn: '#7c3aed',
-      shadow: '#7c3aed33',
-      accent: '#7c3aed',
-      font: '#3b0764',
-      table: '#ede9fe',
-      label: '#ede9fe',
-      hover: '#ddd6fe',
-      border: '#7c3aed',
-      dot: '#7c3aed',
-      sakura: '#a78bfa',
-      sakuraCenter: '#6d28d9'
-    }
-  };
-  let currentTheme = localStorage.getItem('bili-theme') || 'dark';
-  function applyTheme(theme) {
-    const t = THEMES[theme];
-    if (!t) return;
-    // 动画过渡
-    cleanWin.style.transition = 'background 0.4s, color 0.4s, box-shadow 0.4s';
-    menu.style.transition = 'background 0.4s, color 0.4s, box-shadow 0.4s';
-    // 樱花悬浮按钮主题配色
-    floatBtn.style.setProperty('--bili-sakura-petal', t.sakura);
-    floatBtn.style.setProperty('--bili-sakura-center', t.sakuraCenter);
-    floatBtn.style.setProperty('--bili-sakura-glow', t.sakura + '80');
-    // 主面板
-    if (theme === 'dark') {
-      cleanWin.style.background = '#181c20';
-      cleanWin.style.boxShadow = '0 8px 24px #000a, 0 2px 8px #2228';
-      cleanWin.style.color = '#e0e0e0';
-      cleanWin.style.borderRadius = '10px';
-      cleanWin.style.border = '1.5px solid #222';
-      cleanWin.style.fontFamily = "'Microsoft Yahei', Arial, sans-serif";
-      cleanWin.querySelector('.bili-clean-title').style.color = '#7fffd4';
-      cleanWin.querySelector('.bili-clean-title').style.letterSpacing = '1px';
-      cleanWin.querySelector('.bili-clean-title').style.fontWeight = 'bold';
-      cleanWin.querySelector('.bili-clean-sub').style.color = '#b2dfdb';
-      cleanWin.querySelector('.bili-clean-btn').style.background = '#23272e';
-      cleanWin.querySelector('.bili-clean-btn').style.color = '#7fffd4';
-      cleanWin.querySelector('.bili-clean-btn').style.borderRadius = '8px';
-      cleanWin.querySelector('.bili-clean-btn').style.fontWeight = 'bold';
-      cleanWin.querySelector('.bili-clean-close').style.background = '#23272e';
-      cleanWin.querySelector('.bili-clean-close').style.color = '#7fffd4';
-      cleanWin.querySelector('.bili-clean-close').style.borderRadius = '8px';
-      cleanWin.querySelector('.bili-clean-close').style.fontWeight = 'bold';
-      cleanWin.querySelectorAll('.bili-clean-row label').forEach(lab => {
-        lab.style.background = '#23272e';
-        lab.style.color = '#e0e0e0';
-        lab.style.borderRadius = '6px';
-        lab.style.fontFamily = "'Microsoft Yahei', Arial, sans-serif";
-      });
-      cleanWin.querySelector('.bili-clean-table').style.background = '#23272e';
-      cleanWin.querySelectorAll('.bili-clean-thead').forEach(th => th.style.color = '#7fffd4');
-      cleanWin.querySelectorAll('.bili-clean-tbody > div').forEach(row => {
-        row.style.borderBottom = '1px solid #222';
-        row.style.color = '#e0e0e0';
-      });
-    } else {
-      cleanWin.style.background = t.main;
-      cleanWin.style.boxShadow = `0 12px 48px ${t.shadow}, 0 2px 12px #fff8`;
-      cleanWin.style.color = t.font;
-      cleanWin.style.borderRadius = '20px';
-      cleanWin.style.border = '';
-      cleanWin.style.fontFamily = "'Microsoft Yahei', Arial, sans-serif";
-      cleanWin.querySelector('.bili-clean-title').style.color = '';
-      cleanWin.querySelector('.bili-clean-title').style.letterSpacing = '';
-      cleanWin.querySelector('.bili-clean-title').style.fontWeight = 'bold';
-      cleanWin.querySelector('.bili-clean-sub').style.color = t.font;
-      cleanWin.querySelector('.bili-clean-btn').style.background = t.btn;
-      cleanWin.querySelector('.bili-clean-btn').style.color = t.font;
-      cleanWin.querySelector('.bili-clean-btn').style.borderRadius = '12px';
-      cleanWin.querySelector('.bili-clean-btn').style.fontWeight = 'bold';
-      cleanWin.querySelector('.bili-clean-close').style.background = t.label;
-      cleanWin.querySelector('.bili-clean-close').style.color = t.font;
-      cleanWin.querySelector('.bili-clean-close').style.borderRadius = '8px';
-      cleanWin.querySelector('.bili-clean-close').style.fontWeight = 'bold';
-      cleanWin.querySelectorAll('.bili-clean-row label').forEach(lab => {
-        lab.style.background = t.label;
-        lab.style.color = t.font;
-        lab.style.borderRadius = '8px';
-        lab.style.fontFamily = "'Microsoft Yahei', Arial, sans-serif";
-      });
-      cleanWin.querySelector('.bili-clean-table').style.background = t.table;
-      cleanWin.querySelectorAll('.bili-clean-thead').forEach(th => th.style.color = t.border);
-      cleanWin.querySelectorAll('.bili-clean-tbody > div').forEach(row => {
-        row.style.borderBottom = `1px solid ${t.table}`;
-        row.style.color = t.font;
-      });
-    }
-    // 设置面板主题
-    if (theme === 'dark') {
-      settingsWin.style.background = '#181c20';
-      settingsWin.style.boxShadow = '0 8px 24px #000a, 0 2px 8px #2228';
-      settingsWin.style.color = '#e0e0e0';
-      settingsWin.style.borderRadius = '10px';
-      settingsWin.style.border = '1.5px solid #222';
-      settingsWin.querySelector('.bili-settings-title').style.color = '#7fffd4';
-      settingsWin.querySelector('.bili-settings-sub').style.color = '#b2dfdb';
-      settingsWin.querySelector('.bili-settings-body').style.background = '#23272e';
-      settingsWin.querySelector('.bili-settings-divider').style.background = '#333';
-      settingsWin.querySelectorAll('.bili-settings-section-title').forEach(el => el.style.color = '#7fffd4');
-      settingsWin.querySelector('.bili-toggle-track').style.background = '#333';
-      settingsWin.querySelectorAll('.bili-type-chip').forEach(chip => {
-        chip.style.background = '#23272e';
-        chip.style.color = '#e0e0e0';
-      });
-      settingsWin.querySelector('.bili-settings-delay-row select').style.background = '#23272e';
-      settingsWin.querySelector('.bili-settings-delay-row select').style.borderColor = '#444';
-      settingsWin.querySelector('.bili-settings-delay-row select').style.color = '#e0e0e0';
-      settingsWin.querySelector('.bili-settings-save').style.background = '#23272e';
-      settingsWin.querySelector('.bili-settings-save').style.color = '#7fffd4';
-      settingsWin.querySelector('.bili-settings-close').style.background = '#23272e';
-      settingsWin.querySelector('.bili-settings-close').style.color = '#7fffd4';
-    } else {
-      settingsWin.style.background = t.main;
-      settingsWin.style.boxShadow = `0 12px 48px ${t.shadow}, 0 2px 12px #fff8`;
-      settingsWin.style.color = t.font;
-      settingsWin.style.borderRadius = '20px';
-      settingsWin.style.border = '';
-      settingsWin.querySelector('.bili-settings-title').style.color = '';
-      settingsWin.querySelector('.bili-settings-sub').style.color = t.font;
-      settingsWin.querySelector('.bili-settings-body').style.background = t.table;
-      settingsWin.querySelector('.bili-settings-divider').style.background = '';
-      settingsWin.querySelectorAll('.bili-settings-section-title').forEach(el => el.style.color = t.border);
-      settingsWin.querySelector('.bili-toggle-track').style.background = '';
-      settingsWin.querySelectorAll('.bili-type-chip').forEach(chip => {
-        chip.style.background = t.label;
-        chip.style.color = t.font;
-      });
-      settingsWin.querySelector('.bili-settings-delay-row select').style.background = t.label;
-      settingsWin.querySelector('.bili-settings-delay-row select').style.borderColor = '';
-      settingsWin.querySelector('.bili-settings-delay-row select').style.color = t.font;
-      settingsWin.querySelector('.bili-settings-save').style.background = t.btn;
-      settingsWin.querySelector('.bili-settings-save').style.color = t.font;
-      settingsWin.querySelector('.bili-settings-close').style.background = t.label;
-      settingsWin.querySelector('.bili-settings-close').style.color = t.font;
-    }
-    // 菜单
-    menu.style.background = t.main;
-    menu.style.boxShadow = cleanWin.style.boxShadow;
-    menu.style.borderRadius = cleanWin.style.borderRadius;
-    menu.style.border = cleanWin.style.border;
-    menu.style.opacity = '0.9';
-    menu.style.fontFamily = "'Microsoft Yahei', Arial, sans-serif";
-    menu.style.color = t.font;
-    Array.from(menu.children).forEach(item => {
-      if (item.classList && item.classList.contains('bili-float-menu-item')) {
-        item.style.background = 'none';
-        item.style.color = t.font;
-        item.style.fontFamily = "'Microsoft Yahei', Arial, sans-serif";
-        item.style.fontWeight = 'bold';
-      }
-    });
-    // 主题高亮
-    document.querySelectorAll('.bili-theme-dot').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.theme === theme);
-    });
-    currentTheme = theme;
-    localStorage.setItem('bili-theme', theme);
-  }
-
-  // --------- 主题切换菜单（色块按钮） ---------
-  const themeBar = document.createElement('div');
-  themeBar.id = 'bili-theme-bar';
-  themeBar.style.display = 'flex';
-  themeBar.style.justifyContent = 'space-around';
-  themeBar.style.margin = '8px 0 0 0';
-  themeBar.style.gap = '6px';
-  themeBar.style.padding = '8px 12px 12px 12px'; // 增加底部内边距确保完全显示
-  themeBar.style.borderTop = '1px solid rgba(255,255,255,0.2)';
-  themeBar.style.fontSize = '0.98rem';
-  themeBar.style.userSelect = 'none';
-  themeBar.style.minHeight = '40px'; // 确保有足够高度
-  themeBar.style.alignItems = 'center'; // 垂直居中对齐
-  // 色块按钮生成
-  Object.entries(THEMES).forEach(([k, v]) => {
-    const dot = document.createElement('span');
-    dot.className = 'bili-theme-dot';
-    dot.dataset.theme = k;
-    dot.title = v.name;
-    dot.style.display = 'inline-block';
-    dot.style.width = '26px';
-    dot.style.height = '26px';
-    dot.style.borderRadius = '50%';
-    dot.style.margin = '0 2px';
-    dot.style.background = v.dot;
-    dot.style.cursor = 'pointer';
-    dot.style.border = '2.5px solid #fff';
-    dot.style.boxShadow = '0 2px 8px #0002';
-    dot.style.transition = 'box-shadow 0.18s, border 0.18s, transform 0.18s';
-    dot.onmouseenter = () => {
-      if (!dot.classList.contains('active')) {
-        dot.style.transform = 'scale(1.1)';
-        dot.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
-      }
-    };
-    dot.onmouseleave = () => {
-      if (!dot.classList.contains('active')) {
-        dot.style.transform = '';
-        dot.style.boxShadow = '0 2px 8px #0002';
-      }
-    };
-    dot.onclick = () => applyTheme(k);
-    themeBar.appendChild(dot);
-  });
-  menu.appendChild(themeBar);
-  // 初始化主题
-  setTimeout(() => applyTheme(currentTheme), 100);
-
-  // --------- 赞赏二维码弹窗 ---------
-  const donateWin = document.createElement('div');
-  donateWin.id = 'bili-donate-panel';
-  donateWin.style.display = 'none';
-  donateWin.innerHTML = `
-      <div class=\"bili-donate-title\">赞赏作者</div>
-      <img class=\"bili-donate-img\" src=\"${DONATE_QR_URL}\" alt=\"收款二维码\">
-      <div class=\"bili-donate-tip\">感谢支持！</div>
-      <button class=\"bili-donate-close\">关闭</button>
-    `;
-  document.body.appendChild(donateWin);
-  donateWin.querySelector('.bili-donate-close').onclick = () => {
-    donateWin.style.display = 'none';
-  };
-
-  // --------- 自动清理触发 ---------
+  // --------- 自动清理触发（页面加载时触发一次，启用条件：频率非「关闭」） ----------
   (function autoCleanTrigger() {
     const s = loadSettings();
-    if (!s.enabled) return;
+    if (s.freq === '关闭') return;
     const selectedTypes = Object.entries(s.types).filter(([, v]) => v).map(([k]) => k);
     if (!selectedTypes.length) return;
     const typeMap = { reply: 1, like: 0, at: 2, pm: 3, history: 4, system: 5 };
-    const statusMap = { reply: 'clean-status-reply', like: 'clean-status-like', at: 'clean-status-at', pm: 'clean-status-pm', history: 'clean-status-history', system: 'clean-status-system' };
-    const resultMap = { reply: 'clean-res-reply', like: 'clean-res-like', at: 'clean-res-at', pm: 'clean-res-pm', history: 'clean-res-history', system: 'clean-res-system' };
-    log(`自动清理已启用，${s.delay}秒后开始清理: ${selectedTypes.join(', ')}`);
-    setTimeout(async () => {
-      log('自动清理开始');
+    log(`自动清理已启用（${s.freq}），开始清理: ${selectedTypes.join(', ')}`);
+    (async () => {
       for (const t of selectedTypes) {
-        await cleanType(typeMap[t], statusMap[t], resultMap[t]);
+        await cleanType(typeMap[t]);
       }
       log('自动清理完成');
-    }, s.delay * 1000);
+    })();
   })();
+
+  // ===================== UI 层（作用域隔离在 .bc-root，不影响 B 站宿主页） =====================
+  const CSS = `
+.bc-root{
+  --panel:rgba(17,19,31,.95);--panel-solid:rgb(17,19,31);--snack:rgba(17,19,31,.96);
+  --surface2:rgba(255,255,255,.07);--border:rgba(255,255,255,.14);
+  --text:#f5f6fb;--muted:#aab0c5;--accent:#5cc8ff;--accent2:#b388ff;
+  --ok:#4ade80;--warn:#ffb454;--err:#ff6b6b;--glow:rgba(92,200,255,.55);
+  --radius:16px;--shadow:0 18px 44px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.25);
+  font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;color:var(--text)
+}
+.bc-root *{box-sizing:border-box;margin:0;padding:0}
+.bc-root button{font-family:inherit}
+.bc-root .fab{position:fixed;right:24px;bottom:24px;width:46px;height:46px;cursor:pointer;z-index:9999;display:flex;align-items:center;justify-content:center;animation:bcFloat 3.4s ease-in-out infinite;transition:transform .25s;filter:drop-shadow(0 4px 12px var(--glow))}
+.bc-root .fab:hover{transform:scale(1.12) rotate(-6deg)}
+.bc-root .fab svg{width:34px;height:34px}
+@keyframes bcFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+.bc-root .panel{position:fixed;right:22px;bottom:78px;width:286px;max-height:82vh;overflow:auto;background:var(--panel);backdrop-filter:blur(30px) saturate(140%);-webkit-backdrop-filter:blur(30px) saturate(140%);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);text-shadow:0 1px 2px rgba(0,0,0,.55);box-shadow:var(--shadow);z-index:9998;transform-origin:bottom right;transition:opacity .22s,transform .22s}
+.bc-root .panel.hide{opacity:0;transform:scale(.92) translateY(8px);pointer-events:none}
+.bc-root .drops{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;border-radius:var(--radius)}
+.bc-root .drop{position:absolute;top:-14px;border-radius:50% 50% 50% 50%/62% 62% 40% 40%;background:radial-gradient(circle at 34% 30%,rgba(255,255,255,.6),rgba(255,255,255,.12) 42%,rgba(255,255,255,.02) 72%);box-shadow:inset 0 -2px 3px rgba(255,255,255,.3),0 1px 2px rgba(0,0,0,.25);animation:bcDropFall linear infinite}
+@keyframes bcDropFall{0%{transform:translateY(-12px) scale(.55);opacity:0}14%{opacity:.95}84%{opacity:.95}100%{transform:translateY(440px) scale(1.05);opacity:0}}
+.bc-root .ambient{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;border-radius:var(--radius);opacity:.4}
+.bc-root .ambient::before{content:"";position:absolute;inset:0;background:radial-gradient(90% 60% at 0% 0%,var(--glow),transparent 60%),radial-gradient(80% 55% at 100% 100%,color-mix(in srgb,var(--accent) 45%,transparent),transparent 58%)}
+.bc-root .p-head,.bc-root .col{position:relative;z-index:1}
+.bc-root .p-head{display:flex;align-items:center;gap:9px;padding:12px 13px;border-bottom:1px solid var(--border);cursor:grab;touch-action:none;user-select:none}
+.bc-root .p-head:active{cursor:grabbing}
+.bc-root .p-head .dot{width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#1a1a1a;font-weight:800;font-size:12px;box-shadow:0 4px 14px var(--glow)}
+.bc-root .p-head h3{font-size:14px;font-weight:800;flex:1;letter-spacing:.3px;cursor:pointer}
+.bc-root .p-head h3:hover{color:var(--accent2)}
+.bc-root .p-head .x{cursor:pointer;color:var(--muted);font-size:17px;line-height:1;padding:2px 3px}
+.bc-root .col{padding:12px 13px 15px}
+.bc-root .block{margin-bottom:13px}
+.bc-root .chips{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:2px}
+.bc-root .chip{display:flex;align-items:center;justify-content:center;gap:4px;padding:8px 3px;border:1px solid var(--border);border-radius:9px;font-size:11.5px;color:var(--muted);cursor:pointer;user-select:none;transition:.16s;background:transparent}
+.bc-root .chip.on{color:var(--text);background:var(--surface2);border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.bc-root .chip .ct{width:6px;height:6px;border-radius:50%;background:var(--border);transition:.16s}
+.bc-root .chip.on .ct{background:var(--accent)}
+.bc-root .summary{font-size:11.5px;color:var(--muted);margin-top:9px;line-height:1.65}
+.bc-root .summary b{color:var(--accent2);font-weight:600}
+.bc-root .clean-btn{width:100%;margin-top:11px;padding:10px;border:none;border-radius:11px;cursor:pointer;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#1a1a1a;font-size:13px;font-weight:800;box-shadow:0 8px 22px var(--glow);transition:.18s}
+.bc-root .clean-btn:hover{filter:brightness(1.06)}
+.bc-root .clean-btn:disabled{opacity:.5;cursor:default;filter:none}
+.bc-root .prog{height:6px;background:var(--surface2);border-radius:6px;overflow:hidden;margin-top:10px;display:none}
+.bc-root .prog.show{display:block}
+.bc-root .pbar{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:6px;transition:width .15s linear}
+.bc-root .pbar.indet{width:40%;animation:bcScan 1.1s ease-in-out infinite;background:linear-gradient(90deg,transparent,var(--accent),transparent)}
+@keyframes bcScan{0%{transform:translateX(-120%)}100%{transform:translateX(280%)}}
+.bc-root .pnum{font-size:10.5px;color:var(--muted);margin-top:5px;text-align:center;display:none}
+.bc-root .pnum.show{display:block}
+.bc-root .more{margin-top:2px;border-top:1px solid var(--border);padding-top:2px}
+.bc-root .more-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 2px;cursor:pointer;font-size:11px;color:var(--text);user-select:none;letter-spacing:.3px}
+.bc-root .more-status{font-size:10.5px;color:var(--muted);letter-spacing:.2px}
+.bc-root .more-status b{color:var(--text);font-weight:600}
+.bc-root .more-title{display:flex;align-items:center;gap:5px}
+.bc-root .more-head .chev{color:var(--muted);font-size:10px;transition:transform .2s}
+.bc-root .more.open .chev{transform:rotate(90deg)}
+.bc-root .more-body{display:none;padding-bottom:4px}
+.bc-root .more.open .more-body{display:block}
+.bc-root .auto-sub{display:none;padding:9px 0 10px;border-bottom:1px solid var(--border);gap:9px}
+.bc-root .auto-sub.show{display:flex;flex-direction:column}
+.bc-root .auto-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.bc-root .auto-sub .as-l{font-size:11px;color:var(--muted);flex:none}
+.bc-root .row{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)}
+.bc-root .row:last-child{border-bottom:none}
+.bc-root .row label{font-size:12px}
+.bc-root .row .sub{font-size:10px;color:var(--muted);margin-top:1px}
+.bc-root .seg{display:flex;background:var(--surface2);border-radius:8px;padding:2px;flex:1}
+.bc-root .seg button{border:none;background:none;color:var(--muted);font-size:11px;padding:3px 6px;border-radius:6px;cursor:pointer;flex:1;text-align:center;min-width:0;white-space:nowrap}
+.bc-root .seg button.on{background:var(--accent);color:#fff}
+.bc-root .palette{display:flex;gap:7px;align-items:center}
+.bc-root .swatch{width:20px;height:20px;border-radius:50%;cursor:pointer;border:2px solid var(--border);transition:.18s;box-sizing:border-box;flex:none}
+.bc-root .swatch.on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.bc-root .swatch[data-th="dark"]{background:#23263a}
+.bc-root .swatch[data-th="pink"]{background:#fb7299}
+.bc-root .swatch[data-th="blue"]{background:#546de5}
+.bc-root .swatch[data-th="green"]{background:#16a085}
+.bc-root .swatch[data-th="purple"]{background:#a855f7}
+.bc-root .snack{position:fixed;left:50%;bottom:30px;transform:translateX(-50%) translateY(20px);background:var(--snack);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--border);border-radius:13px;box-shadow:var(--shadow);padding:11px 15px;display:flex;align-items:center;gap:13px;z-index:10000;min-width:270px;opacity:0;pointer-events:none;transition:.25s;color:var(--text)}
+.bc-root .snack.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
+.bc-root .snack .txt{font-size:12.5px;flex:1}
+.bc-root .snack .txt b{color:var(--accent2);font-weight:600}
+.bc-root .snack .undo{border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:11.5px;padding:5px 11px;border-radius:9px;cursor:pointer}
+.bc-root .snack .undo:hover{border-color:var(--accent)}
+.bc-root .ring{width:24px;height:24px;flex:none}
+.bc-root .ring circle{fill:none;stroke:var(--border);stroke-width:3}
+.bc-root .ring .fg{stroke:var(--accent);stroke-linecap:round;transform:rotate(-90deg);transform-origin:center;stroke-dasharray:75.4;stroke-dashoffset:0;transition:stroke-dashoffset 1s linear}
+.bc-root .snack .bar{position:absolute;left:0;bottom:0;height:3px;background:var(--accent);border-radius:0 0 13px 13px;width:100%;transition:width 1s linear}
+`;
+
+  const HTML = `
+<div class="fab" id="fab" title="BiliClean">
+  <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <g transform="translate(24,22)">
+      <g opacity=".92">
+        <g>
+          <animateTransform attributeName="transform" type="rotate" values="0;360" dur="9s" repeatCount="indefinite"/>
+          <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--accent)"/>
+          <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--accent)" transform="rotate(72)"/>
+          <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--accent)" transform="rotate(144)"/>
+          <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--accent)" transform="rotate(216)"/>
+          <path d="M0,-10 C3,-8 3,-4 0,-2 C-3,-4 -3,-8 0,-10 Z" fill="var(--accent)" transform="rotate(288)"/>
+        </g>
+        <circle cx="0" cy="0" r="2.2" fill="var(--accent2)" opacity=".75"/>
+      </g>
+      <circle cx="8" cy="10" r="1.5" fill="var(--accent)" opacity=".4">
+        <animate attributeName="opacity" values=".2;.6;.2" dur="3s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+  </svg>
+</div>
+<div class="panel hide" id="panel">
+  <div class="ambient"></div>
+  <div class="drops" id="drops"></div>
+  <div class="p-head">
+    <span class="dot">BC</span><h3 id="title" title="拖我移动 · 点击反选类别">BiliClean</h3><span class="x" id="close">×</span>
+  </div>
+  <div class="col">
+    <div class="block">
+      <div class="chips" id="cats">
+        <div class="chip on" data-cat="reply"><span class="ct"></span>回复</div>
+        <div class="chip on" data-cat="like"><span class="ct"></span>赞我</div>
+        <div class="chip on" data-cat="at"><span class="ct"></span>艾特</div>
+        <div class="chip on" data-cat="pm"><span class="ct"></span>私信</div>
+        <div class="chip on" data-cat="history"><span class="ct"></span>历史</div>
+        <div class="chip on" data-cat="system"><span class="ct"></span>系统</div>
+      </div>
+      <div class="summary" id="summary">已选 6 类守护中</div>
+      <button class="clean-btn" id="cleanNow">立即清理</button>
+      <div class="prog" id="prog"><div class="pbar" id="pbar"></div></div>
+      <div class="pnum" id="pnum">已清理 0 条</div>
+    </div>
+    <div class="more" id="more">
+      <div class="more-head" id="moreHead">
+        <span class="more-status" id="moreStatus"></span>
+        <span class="more-title">自动清理<span class="chev">▸</span></span>
+      </div>
+      <div class="more-body">
+        <div class="auto-sub show" id="autoSub">
+          <div class="auto-row">
+            <span class="as-l">频率</span>
+            <div class="seg" id="freq">
+              <button data-v="关闭">关闭</button>
+              <button data-v="每次">每次</button>
+              <button data-v="每天">每天</button>
+              <button data-v="每周">每周</button>
+            </div>
+          </div>
+          <div class="auto-row">
+            <span class="as-l">保留</span>
+            <div class="seg" id="keep">
+              <button data-v="当天">当天</button>
+              <button data-v="三天">三天</button>
+              <button data-v="一周">一周</button>
+              <button data-v="全部清理">全部清理</button>
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <div><label>主题</label><div class="sub">暗·粉·蓝·绿·紫</div></div>
+          <div class="palette" id="pal">
+            <span class="swatch on" data-th="dark" title="暗"></span>
+            <span class="swatch" data-th="pink" title="粉"></span>
+            <span class="swatch" data-th="blue" title="蓝"></span>
+            <span class="swatch" data-th="green" title="绿"></span>
+            <span class="swatch" data-th="purple" title="紫"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="snack" id="snack">
+  <svg class="ring" viewBox="0 0 26 26">
+    <circle cx="13" cy="13" r="12"/>
+    <circle class="fg" id="ringFg" cx="13" cy="13" r="12"/>
+  </svg>
+  <div class="txt">即将清理 <b id="snN">6</b> 类 · 可撤销</div>
+  <button class="undo" id="undoBtn">撤销</button>
+  <div class="bar" id="snBar"></div>
+</div>`;
+
+  // 注入样式与 DOM（作用域隔离，不影响 B 站宿主页）
+  const styleEl = document.createElement('style');
+  styleEl.textContent = CSS;
+  document.documentElement.appendChild(styleEl);
+  const bcRoot = document.createElement('div');
+  bcRoot.className = 'bc-root';
+  bcRoot.innerHTML = HTML;
+  document.documentElement.appendChild(bcRoot);
+
+  const $ = s => bcRoot.querySelector(s);
+  const $$ = s => bcRoot.querySelectorAll(s);
+
+  // 五套主题（仅作用于工具面板，不影响宿主页）：暗=深空霓虹 / 粉(B站粉) / 蓝 / 绿(青) / 紫
+  const THEMES = {
+    dark: { panel: 'rgba(17,19,31,.95)', panelSolid: 'rgb(17,19,31)', snack: 'rgba(17,19,31,.96)', surface2: 'rgba(255,255,255,.07)', border: 'rgba(255,255,255,.14)', text: '#f5f6fb', muted: '#aab0c5', accent: '#5cc8ff', accent2: '#b388ff', glow: 'rgba(92,200,255,.55)', ok: '#4ade80', warn: '#ffb454', err: '#ff6b6b' },
+    pink: { panel: 'rgba(40,26,33,.95)', panelSolid: 'rgb(40,26,33)', snack: 'rgba(40,26,33,.96)', surface2: 'rgba(255,180,200,.10)', border: 'rgba(255,170,195,.16)', text: '#f7eef2', muted: '#cfa3b6', accent: '#fb7299', accent2: '#ffa6c9', glow: 'rgba(251,114,153,.6)', ok: '#4ade80', warn: '#ffb454', err: '#ff6b6b' },
+    blue: { panel: 'rgba(22,28,44,.95)', panelSolid: 'rgb(22,28,44)', snack: 'rgba(22,28,44,.96)', surface2: 'rgba(150,180,255,.10)', border: 'rgba(140,170,255,.16)', text: '#eef2fb', muted: '#a6b8d6', accent: '#5b7cfa', accent2: '#8aa0ff', glow: 'rgba(91,124,250,.6)', ok: '#4ade80', warn: '#ffb454', err: '#ff6b6b' },
+    green: { panel: 'rgba(18,38,33,.95)', panelSolid: 'rgb(18,38,33)', snack: 'rgba(18,38,33,.96)', surface2: 'rgba(120,210,180,.10)', border: 'rgba(120,200,170,.16)', text: '#eaf5f0', muted: '#9cc0b2', accent: '#1abc9c', accent2: '#34d4a8', glow: 'rgba(26,188,156,.6)', ok: '#4ade80', warn: '#ffb454', err: '#ff6b6b' },
+    purple: { panel: 'rgba(32,24,46,.95)', panelSolid: 'rgb(32,24,46)', snack: 'rgba(32,24,46,.96)', surface2: 'rgba(180,150,255,.10)', border: 'rgba(175,150,255,.16)', text: '#f1ecf8', muted: '#bdaed8', accent: '#b15cff', accent2: '#c894ff', glow: 'rgba(177,92,255,.6)', ok: '#4ade80', warn: '#ffb454', err: '#ff6b6b' }
+  };
+  function applyTheme(name) {
+    const t = THEMES[name];
+    for (const k in t) bcRoot.style.setProperty('--' + k, t[k]);
+  }
+
+  // --- 面板开关 ---
+  const fab = $('#fab'), panel = $('#panel'), close = $('#close');
+  fab.onclick = () => panel.classList.toggle('hide');
+  close.onclick = () => panel.classList.add('hide');
+
+  // 清理范围（6 类持久偏好，不在前端预载数量）
+  const CATS = { reply: '回复', like: '赞我', at: '艾特', pm: '私信', history: '历史', system: '系统' };
+  let settings = loadSettings();
+  const summary = $('#summary');
+  const chips = $$('#cats .chip');
+  function updateSel() {
+    const n = Object.values(settings.types).filter(v => v).length;
+    summary.innerHTML = '已选 ' + n + ' 类守护中';
+  }
+  chips.forEach(s => s.onclick = () => {
+    const cat = s.dataset.cat;
+    settings.types[cat] = !settings.types[cat];
+    s.classList.toggle('on', settings.types[cat]);
+    saveSettings(settings);
+    updateSel();
+  });
+
+  // 自动清理折叠（单栏：收纳不常用项）
+  const more = $('#more'), moreHead = $('#moreHead');
+  moreHead.onclick = () => more.classList.toggle('open');
+
+  // 频率 / 保留（常驻显示；频率选「关闭」即停用自动清理，配置写入本地）
+  const moreStatus = $('#moreStatus');
+  function syncAutoLabel() {
+    const f = $('#freq button.on').dataset.v;
+    const k = $('#keep button.on').dataset.v;
+    moreStatus.className = 'more-status';
+    moreStatus.innerHTML = (f === '关闭')
+      ? '已关闭'
+      : (k === '全部清理' ? f + ' · <b>全部清理</b>' : f + ' · 保留' + k);
+  }
+  function bindSeg(id, key) {
+    $$(`#${id} button`).forEach(b => b.onclick = () => {
+      $$(`#${id} button`).forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      settings[key] = b.dataset.v; saveSettings(settings);
+      syncAutoLabel();
+    });
+  }
+  bindSeg('freq', 'freq'); bindSeg('keep', 'keep');
+
+  // 五主题切换（仅面板换肤，不动宿主页）
+  let theme = 'dark';
+  const swatches = $$('#pal .swatch');
+  swatches.forEach(s => s.onclick = () => {
+    theme = s.dataset.th;
+    swatches.forEach(x => x.classList.remove('on'));
+    s.classList.add('on');
+    applyTheme(theme);
+    settings.theme = theme; saveSettings(settings);
+  });
+
+  // --- 宽限确认（核心）---
+  const snack = $('#snack'), snN = $('#snN'), ringFg = $('#ringFg'), snBar = $('#snBar'),
+    undoBtn = $('#undoBtn'), cleanNow = $('#cleanNow'),
+    prog = $('#prog'), pbar = $('#pbar'), pnum = $('#pnum');
+  let graceTimer = null, graceLeft = 0, busy = false, hideTimer = null;
+  const TOTAL = 3;
+  function requestClean(k, cats) {
+    snN.textContent = k;
+    snack.classList.add('show');
+    graceLeft = TOTAL;
+    ringFg.style.transition = 'none'; ringFg.style.strokeDashoffset = 0; snBar.style.transition = 'none'; snBar.style.width = '100%';
+    requestAnimationFrame(() => { ringFg.style.transition = 'stroke-dashoffset 1s linear'; snBar.style.transition = 'width 1s linear'; });
+    graceTimer = setInterval(() => {
+      graceLeft--;
+      const frac = graceLeft / TOTAL;
+      ringFg.style.strokeDashoffset = 75.4 * (1 - frac);
+      snBar.style.width = (frac * 100) + '%';
+      if (graceLeft <= 0) { clearInterval(graceTimer); graceTimer = null; startRealClean(cats); }
+    }, 1000);
+  }
+  function cancelClean() {
+    if (graceTimer) { clearInterval(graceTimer); graceTimer = null; }
+    snack.classList.remove('show');
+    summary.innerHTML = '已取消本次清理';
+    busy = false; cleanNow.disabled = false;
+  }
+  // 真实清理：调用核心 cleanType，通过 report/onProgress 回调驱动进度与纯文字摘要（不预载总数）
+  async function startRealClean(cats) {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    snack.classList.remove('show');
+    prog.classList.add('show'); pnum.classList.add('show');
+    pbar.classList.add('indet'); pnum.textContent = '清理中…';
+    busy = true; cleanNow.disabled = true;
+    const shares = {}; const clearSet = new Set(); cats.forEach(c => shares[c] = 0);
+    const savedReport = report, savedProg = onProgress;
+    report = (typeKey, statusText) => {
+      if (typeKey && (typeKey in shares)) {
+        if (statusText === 'clear') { clearSet.add(typeKey); }
+        else { const n = parseInt(statusText, 10); if (!isNaN(n)) shares[typeKey] = n; }
+      }
+    };
+    onProgress = (r) => { pbar.classList.remove('indet'); pbar.style.width = Math.max(2, Math.round(r * 100)) + '%'; };
+    const typeMap = { reply: 1, like: 0, at: 2, pm: 3, history: 4, system: 5 };
+    try {
+      for (const c of cats) { await cleanType(typeMap[c]); }
+    } catch (e) { log('清理过程异常: ' + e); }
+    report = savedReport; onProgress = savedProg;
+    pbar.classList.remove('indet'); pbar.style.width = '100%';
+    const cleared = cats.filter(c => clearSet.has(c));
+    const counted = cats.filter(c => !clearSet.has(c));
+    const sum = counted.reduce((a, c) => a + shares[c], 0);
+    if (sum > 0 || cleared.length) {
+      const parts = [];
+      const cntDetail = counted.filter(c => shares[c] > 0).map(c => CATS[c] + ' ' + shares[c]).join(' · ');
+      if (cntDetail) parts.push(cntDetail);
+      if (cleared.length) parts.push(cleared.map(c => '已清空' + CATS[c]).join(' · '));
+      summary.innerHTML = '✓ 已清理 <b>' + sum + '</b> 条（' + parts.join(' · ') + '）';
+    } else {
+      summary.innerHTML = '✓ 已清理 0 条（所选类别暂无可清理内容）';
+    }
+    busy = false; cleanNow.disabled = false;
+    setTimeout(() => { prog.classList.remove('show'); pnum.classList.remove('show'); }, 900);
+  }
+  undoBtn.onclick = cancelClean;
+  cleanNow.onclick = () => {
+    if (busy) return;
+    const onCats = Object.keys(settings.types).filter(k => settings.types[k]);
+    if (!onCats.length) { summary.innerHTML = '未勾选任何清理类别'; return; }
+    busy = true; requestClean(onCats.length, onCats);
+  };
+
+  // 面板内水滴特效：在玻璃上生成缓缓滑落的冷凝水珠
+  const dropsEl = $('#drops');
+  for (let i = 0; i < 16; i++) {
+    const d = document.createElement('div'); d.className = 'drop';
+    const size = (5 + Math.random() * 9).toFixed(1);
+    d.style.left = (Math.random() * 100).toFixed(1) + '%';
+    d.style.width = size + 'px'; d.style.height = (size * 1.15).toFixed(1) + 'px';
+    d.style.animationDuration = (5 + Math.random() * 6).toFixed(1) + 's';
+    d.style.animationDelay = (-Math.random() * 11).toFixed(1) + 's';
+    dropsEl.appendChild(d);
+  }
+
+  // 面板任意拖动（抓标题栏移动）；未拖动且点在标题上 = 反选类别
+  const pHead = panel.querySelector('.p-head');
+  let drag = null;
+  pHead.addEventListener('pointerdown', e => {
+    if (e.target.classList.contains('x')) return; // 关闭按钮不触发拖动
+    const r = panel.getBoundingClientRect();
+    panel.style.left = r.left + 'px'; panel.style.top = r.top + 'px';
+    panel.style.right = 'auto'; panel.style.bottom = 'auto';
+    const onTitle = !!e.target.closest('#title');
+    drag = { sx: e.clientX, sy: e.clientY, l: r.left, t: r.top, moved: false, onTitle };
+    pHead.setPointerCapture(e.pointerId);
+  });
+  pHead.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    if (drag.moved) { panel.style.left = (drag.l + dx) + 'px'; panel.style.top = (drag.t + dy) + 'px'; }
+  });
+  pHead.addEventListener('pointerup', e => {
+    if (drag && !drag.moved && drag.onTitle) {
+      chips.forEach(s => { const on = !s.classList.contains('on'); s.classList.toggle('on', on); settings.types[s.dataset.cat] = on; }); saveSettings(settings);
+      updateSel();
+    }
+    drag = null;
+  });
+
+  // 初始：应用主题 + 还原自动清理配置到 UI + 同步状态
+  $$('#freq button').forEach(b => { if (b.dataset.v === settings.freq) b.classList.add('on'); });
+  $$('#keep button').forEach(b => { if (b.dataset.v === settings.keep) b.classList.add('on'); });
+  chips.forEach(s => s.classList.toggle('on', !!settings.types[s.dataset.cat]));
+  theme = settings.theme || 'dark';
+  swatches.forEach(s => s.classList.toggle('on', s.dataset.th === theme));
+  applyTheme(theme);
+  updateSel();
+  syncAutoLabel();
 
 })();
